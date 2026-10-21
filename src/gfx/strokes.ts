@@ -5,7 +5,6 @@
 import { Buffer, BufferUsage, Geometry, GlProgram, Mesh, Shader } from 'pixi.js';
 import { type Vec, clamp, easeOutSine } from '../core/math';
 import type { RGB } from '../render/color';
-import { smoothPath } from '../render/brush';
 import { MESH_VERTEX_HEADER, NOISE_GLSL } from './glsl';
 
 /** 정점 하나: 위치2 + uv2 + 색4 + 붓 매개변수4 + 보조4 = 16 float */
@@ -53,7 +52,7 @@ void main() {
   float a = abs(across);
 
   // 종이결에 걸려 들쭉날쭉한 가장자리
-  float rag = fbm(vec2(along * 0.035 + seed * 7.0, across * 1.1 + seed));
+  float rag = fbm3(vec2(along * 0.035 + seed * 7.0, across * 1.1 + seed));
   float fiber = vnoise(vec2(along * 0.45, across * 9.0 + seed)) - 0.5;
   float edge = 0.92 + (rag - 0.5) * 0.38 + fiber * 0.08;
   float body = 1.0 - smoothstep(edge - 0.2, edge + 0.05, a);
@@ -73,7 +72,7 @@ void main() {
   density *= mix(1.0, 0.5 + 0.5 * gapLine, dry * 0.75) * (1.0 - (0.3 * (0.4 + dry)) * (1.0 - fine));
 
   // 먹의 농담 — 획 머리에 먹이 고이고 꼬리로 갈수록 옅어진다
-  float pool = fbm(vec2(along * 0.018 + seed, across * 0.6));
+  float pool = vnoise(vec2(along * 0.018 + seed, across * 0.6));
   density *= mix(1.18, 0.78, t * (0.4 + dry)) * (0.8 + 0.4 * pool);
 
   // 먹이 가장자리로 몰려 짙어진다
@@ -90,6 +89,82 @@ void main() {
   finalColor = vec4(col * alpha, alpha);
 }
 `;
+
+/** 곡선을 다시 찍을 때 쓰는 작업 공간 — 매 프레임 수백 개의 획이 지나가니 새로 만들지 않는다 */
+let PX = new Float64Array(1024);
+let PY = new Float64Array(1024);
+
+/** 담아 둔 점은 그대로 둔 채 자리를 늘린다 */
+function reserve(n: number): void {
+  if (n <= PX.length) return;
+  const size = Math.max(n, PX.length * 2);
+  const nx = new Float64Array(size);
+  const ny = new Float64Array(size);
+  nx.set(PX);
+  ny.set(PY);
+  PX = nx;
+  PY = ny;
+}
+
+/**
+ * 조절점을 캣멀롬 곡선으로 잇고 일정한 간격으로 다시 찍어 PX, PY에 담는다.
+ * render/brush.ts의 smoothPath와 같은 결과를 객체 없이 만든다. 찍은 점의 수를 돌려준다.
+ */
+function resample(pts: readonly Vec[], spacing: number): number {
+  const m = pts.length;
+  const SUB = 10;
+  reserve(Math.ceil(((m - 1) * SUB + 1) * 1.2) + 64);
+  let n = 0;
+  PX[n] = pts[0].x;
+  PY[n] = pts[0].y;
+  n++;
+  let ax = pts[0].x;
+  let ay = pts[0].y;
+  let acc = 0;
+  const visit = (bx: number, by: number): void => {
+    let seg = Math.hypot(bx - ax, by - ay);
+    while (acc + seg >= spacing && seg > 0) {
+      const t = (spacing - acc) / seg;
+      ax += (bx - ax) * t;
+      ay += (by - ay) * t;
+      if (n >= PX.length) reserve(n * 2);
+      PX[n] = ax;
+      PY[n] = ay;
+      n++;
+      seg = Math.hypot(bx - ax, by - ay);
+      acc = 0;
+    }
+    acc += seg;
+    ax = bx;
+    ay = by;
+  };
+  for (let i = 0; i < m - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(m - 1, i + 2)];
+    // 첫 칸(s=0)은 앞 점 자체이므로 i=0일 때만 시작점이 된다(이미 넣었다)
+    for (let k = i === 0 ? 1 : 0; k < SUB; k++) {
+      const t = k / SUB;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      visit(
+        0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      );
+    }
+  }
+  const lx = pts[m - 1].x;
+  const ly = pts[m - 1].y;
+  visit(lx, ly);
+  if (n >= PX.length) reserve(n + 1);
+  if (Math.hypot(PX[n - 1] - lx, PY[n - 1] - ly) > spacing * 0.3) {
+    PX[n] = lx;
+    PY[n] = ly;
+    n++;
+  }
+  return n;
+}
 
 export interface GpuStroke {
   width: number;
@@ -161,13 +236,14 @@ export class StrokeBatch {
   stroke(pts: readonly Vec[], s: GpuStroke): void {
     const width = s.width;
     if (width <= 0.2 || pts.length < 2) return;
-    const path = smoothPath(pts, Math.max(1.5, Math.min(6, width * 0.22)));
-    const total = path.length;
+    const total = resample(pts, Math.max(1.5, Math.min(6, width * 0.22)));
     if (total < 2) return;
     const n = s.progress === undefined ? total : Math.max(2, Math.ceil(total * clamp(s.progress, 0, 1)));
+    const X = PX;
+    const Y = PY;
 
     let L = 0;
-    for (let i = 1; i < total; i++) L += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+    for (let i = 1; i < total; i++) L += Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1]);
 
     this.ensure(n * 2);
     const tin = s.taperIn ?? 0.12;
@@ -188,24 +264,25 @@ export class StrokeBatch {
     let along = 0;
     for (let i = 0; i < n; i++) {
       const t = i / (total - 1);
-      if (i > 0) along += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+      if (i > 0) along += Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1]);
       let pr = 1;
       if (tin > 0 && t < tin) pr *= 0.22 + 0.78 * easeOutSine(t / tin);
       if (tout > 0 && t > 1 - tout) pr *= 0.05 + 0.95 * Math.pow((1 - t) / tout, 0.85);
       const wob = 1 + rough * 0.12 * (Math.sin(i * 0.55 + ph) + 0.5 * Math.sin(i * 1.7 + ph * 2.3));
       const half = width * 0.5 * pr * wob * MARGIN;
-      const a = path[Math.max(0, i - 1)];
-      const c = path[Math.min(total - 1, i + 1)];
-      const dx = c.x - a.x;
-      const dy = c.y - a.y;
+      const ia = Math.max(0, i - 1);
+      const ic = Math.min(total - 1, i + 1);
+      const dx = X[ic] - X[ia];
+      const dy = Y[ic] - Y[ia];
       const l = Math.hypot(dx, dy) || 1;
       const nx = -dy / l;
       const ny = dx / l;
-      const p = path[i];
+      const px = X[i];
+      const py = Y[i];
       for (let side = -1; side <= 1; side += 2) {
         const o = (base + i * 2 + (side + 1) / 2) * STRIDE;
-        v[o] = p.x + nx * half * side;
-        v[o + 1] = p.y + ny * half * side;
+        v[o] = px + nx * half * side;
+        v[o + 1] = py + ny * half * side;
         v[o + 2] = along;
         v[o + 3] = side * MARGIN;
         v[o + 4] = r / 255;

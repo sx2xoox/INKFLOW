@@ -9,6 +9,7 @@ import { Sound } from './audio';
 import { Game, type InputFrame } from './game/game';
 import { WORLD_H, WORLD_W } from './game/types';
 import { View } from './gfx/view';
+import { ResolutionGovernor } from './gfx/governor';
 import { INK_ORDER, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
 import { CHAPTER, ROOM_KINDS } from './game/rooms';
@@ -22,6 +23,8 @@ const DEBUG = params.has('debug');
 const DEMO = params.has('demo');
 /** 그림 점검용 진열장 */
 const GALLERY = params.get('gallery');
+/** 해상도를 고정해서 볼 때 (?res=1.5) */
+const FORCED_RES = Number(params.get('res')) || 0;
 
 /**
  * 웹 글꼴은 글자 묶음별로 나눠 받는다. 캔버스에 쓸 글자를 미리 알려 줘야
@@ -67,11 +70,14 @@ async function boot(): Promise<void> {
 
   await loadFonts();
 
+  // 고해상도 화면은 1.5배에서 시작하고, 기기가 넉넉하면 화면 배율까지 올린다
+  const maxRes = FORCED_RES || Math.min(2, window.devicePixelRatio || 1);
+  const startRes = FORCED_RES || Math.min(maxRes, 1.5);
   const app = new Application();
   await app.init({
     preference: 'webgl',
     resizeTo: window,
-    resolution: Math.min(2, window.devicePixelRatio || 1),
+    resolution: startRes,
     autoDensity: true,
     antialias: false,
     autoStart: false,
@@ -80,6 +86,7 @@ async function boot(): Promise<void> {
   host.appendChild(app.canvas);
 
   const view = new View(app);
+  const governor = new ResolutionGovernor(app.renderer, () => view.resize(), maxRes, startRes);
   // 늦게 도착한 글꼴 조각이 있으면 구워 둔 글자를 새로 굽는다
   document.fonts.addEventListener('loadingdone', () => view.text.clear());
   const game = new Game();
@@ -125,7 +132,9 @@ async function boot(): Promise<void> {
 
   let last = performance.now();
   const loop = (now: number): void => {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    // 첫 프레임의 시각은 등록한 때보다 앞설 수 있다 — 거꾸로 흐르지 않게 막는다
+    const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+    if (!FORCED_RES && !freeze && !document.hidden) governor.frame(now - last);
     last = now;
     if (freeze) {
       freeze();
@@ -168,7 +177,7 @@ async function boot(): Promise<void> {
       if (i % 90 === 0 || i === n - 1) view.render(game, 1 / 60);
     }
   };
-  Object.assign(window, { __game: game, __view: view, __step: step, __ready: true });
+  Object.assign(window, { __game: game, __view: view, __governor: governor, __step: step, __ready: true });
 }
 
 /** 시연용 붓잡이: 가까운 먹귀를 겨누며 원을 그리듯 움직이고, 샘과 문으로 걸어간다 */

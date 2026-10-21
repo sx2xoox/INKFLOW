@@ -15,6 +15,15 @@ float vnoise(vec2 p) {
              mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+float fbm3(vec2 p) {
+  float s = 0.5 * vnoise(p);
+  p = p * 2.03 + vec2(17.1, 9.2);
+  s += 0.25 * vnoise(p);
+  p = p * 2.03 + vec2(17.1, 9.2);
+  s += 0.125 * vnoise(p);
+  return s / 0.875;
+}
+
 float fbm(vec2 p) {
   float s = 0.0;
   float a = 0.5;

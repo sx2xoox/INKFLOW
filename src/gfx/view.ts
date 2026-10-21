@@ -18,6 +18,7 @@ import { Compositor } from './composite';
 import { drawDashTrail, drawGate, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTrace, drawZone } from './fx';
 import { Hud } from './hud';
 import { InkSim } from './inksim';
+import { bakePaperFx } from './paperfx';
 import { StrokeBatch } from './strokes';
 import { TextCache, textRes } from './text';
 
@@ -115,12 +116,13 @@ export class View {
     const { width, height } = app.screen;
     const res = app.renderer.resolution;
     this.inkRT = RenderTexture.create({ width, height, resolution: res });
-    this.compositor = new Compositor(this.inkRT, this.paperTex, WORLD_W, WORLD_H);
+    const paperFx = bakePaperFx(app.renderer, WORLD_W, WORLD_H);
+    this.compositor = new Compositor(this.inkRT, this.paperTex, paperFx, WORLD_W, WORLD_H);
     // 글씨가 또렷해야 하는 화면 표시는 합성 위에 바로 그린다
     app.stage.addChild(this.compositor.mesh, this.overlay, this.hudLayer);
     this.overlay.addChild(this.textLayer);
 
-    this.stains = new InkSim(app.renderer, this.atlas, WORLD_W, WORLD_H);
+    this.stains = new InkSim(app.renderer, this.atlas, WORLD_W, WORLD_H, paperFx);
 
     this.inkScene.addChild(this.world);
     this.world.addChild(this.stains.sprite, this.ground, this.groundStrokes.mesh, this.entities, this.fxLayer);
@@ -169,7 +171,7 @@ export class View {
   resize(): void {
     const { width, height } = this.app.screen;
     const res = this.app.renderer.resolution;
-    if (this.inkRT.width !== width || this.inkRT.height !== height) {
+    if (this.inkRT.width !== width || this.inkRT.height !== height || this.inkRT.source.resolution !== res) {
       this.inkRT.resize(width, height, res);
     }
     this.compositor.resize(width, height, width * res, height * res);

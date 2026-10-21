@@ -14,20 +14,24 @@ import {
   Shader,
   Sprite,
   type TEXTURE_FORMATS,
+  type Texture,
   type WebGLRenderer,
 } from 'pixi.js';
 import type { Stamp } from '../game/types';
 import type { Atlas } from './atlas';
 import { BAKE } from './atlas';
 import { BLOB_R, BLOB_VARIANTS, SPLAT_R, SPLAT_VARIANTS } from './assets';
-import { MESH_VERTEX_HEADER, NOISE_GLSL } from './glsl';
+import { MESH_VERTEX_HEADER } from './glsl';
+import { PAPER_FX_DECODE } from './paperfx';
 
 /** 세계 1단위당 시뮬레이션 칸 수 */
 const SIM_RES = 0.5;
 /** 한 프레임에 몇 번 흘릴지 */
 const STEPS_PER_FRAME = 2;
-/** 마지막 먹이 떨어진 뒤 이만큼 지나면 계산을 쉰다(초) */
+/** 마지막 먹이 떨어진 뒤 이만큼 지나면 그 칸은 계산을 쉰다(초) — 물은 2초 안에 다 마른다 */
 const WET_HOLD = 4;
+/** 젖은 곳만 계산하려고 세계를 이 크기의 칸으로 나눈다 */
+const TILE = 200;
 
 const toHex = (c: readonly number[]): number => ((c[0] & 255) << 16) | ((c[1] & 255) << 8) | (c[2] & 255);
 
@@ -47,23 +51,18 @@ in vec2 vUV;
 out vec4 finalColor;
 uniform sampler2D uP;
 uniform sampler2D uW;
-${NOISE_GLSL}
 `;
 
 /** 물: 젖은 곳에서 마른 곳으로 천천히 번지고, 가장자리부터 마른다 */
 const waterFrag = /* glsl */ `
 ${COMMON}
 uniform vec2 uTexel;
-uniform vec2 uWorld;
-float perm(vec2 wp) {
-  // 종이마다 물을 빨아들이는 정도가 다르다 — 섬유 방향으로 길쭉한 얼룩
-  float f = fbm(wp * vec2(0.05, 0.11) + 3.0) * 0.6 + vnoise(wp * 0.35) * 0.4;
-  return 0.3 + 0.9 * smoothstep(0.25, 0.75, f);
-}
+uniform sampler2D uFx;
+${PAPER_FX_DECODE}
 void main() {
   float w = texture(uW, vUV).r;
-  vec2 wp = vUV * uWorld;
-  float pm = perm(wp);
+  // 종이마다 물을 빨아들이는 정도가 다르다 — 섬유 방향으로 길쭉한 얼룩(미리 구워 둔 것)
+  float pm = fxPerm(texture(uFx, vUV));
   float sum = texture(uW, vUV + vec2(uTexel.x, 0.0)).r + texture(uW, vUV - vec2(uTexel.x, 0.0)).r
             + texture(uW, vUV + vec2(0.0, uTexel.y)).r + texture(uW, vUV - vec2(0.0, uTexel.y)).r;
   float acc = (sum - 4.0 * w) * 0.2 * pm;
@@ -120,7 +119,12 @@ export class InkSim {
   private readonly pigment: Pass;
   private readonly stampLayer = new Container();
   private readonly stampPool: Sprite[] = [];
-  private wetT = 0;
+  /** 칸마다 남은 젖음 시간 */
+  private readonly wet: Float32Array;
+  private readonly cols: number;
+  private readonly rows: number;
+  private readonly geometries: MeshGeometry[] = [];
+  private activeKey = '';
   private fadeNext = 1;
   readonly floatOk: boolean;
 
@@ -129,6 +133,7 @@ export class InkSim {
     private readonly atlas: Atlas,
     private readonly worldW: number,
     private readonly worldH: number,
+    private readonly paperFx: Texture,
   ) {
     const gl = renderer as WebGLRenderer;
     this.floatOk = !!gl.context?.extensions?.colorBufferFloat;
@@ -139,10 +144,12 @@ export class InkSim {
     const empty = new Container();
     for (const t of [...this.P, ...this.W]) renderer.render({ container: empty, target: t, clear: true, clearColor: [0, 0, 0, 0] });
 
+    this.cols = Math.ceil(worldW / TILE);
+    this.rows = Math.ceil(worldH / TILE);
+    this.wet = new Float32Array(this.cols * this.rows);
     const texel = new Float32Array([1 / (worldW * SIM_RES), 1 / (worldH * SIM_RES)]);
     this.water = this.makePass(waterFrag, 'ink-sim-water', {
       uTexel: { value: texel, type: 'vec2<f32>' },
-      uWorld: { value: new Float32Array([worldW, worldH]), type: 'vec2<f32>' },
     });
     this.pigment = this.makePass(pigmentFrag, 'ink-sim-pigment', {
       uTexel: { value: texel, type: 'vec2<f32>' },
@@ -152,22 +159,24 @@ export class InkSim {
   }
 
   private makePass(fragment: string, name: string, uniforms: Record<string, { value: unknown; type: string }>): Pass {
-    const W = this.worldW;
-    const H = this.worldH;
-    const geometry = new MeshGeometry({
-      positions: new Float32Array([0, 0, W, 0, W, H, 0, H]),
-      uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
-      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
-    });
+    // 칸마다 사각형 하나 — 쉬는 칸은 넓이 0으로 접어 둔다
+    const n = Math.ceil(this.worldW / TILE) * Math.ceil(this.worldH / TILE);
+    const indices = new Uint32Array(n * 6);
+    for (let i = 0; i < n; i++) indices.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3], i * 6);
+    const geometry = new MeshGeometry({ positions: new Float32Array(n * 8), uvs: new Float32Array(n * 8), indices });
+    this.geometries.push(geometry);
     const shader = new Shader({
       glProgram: GlProgram.from({ vertex, fragment, name, preferredFragmentPrecision: 'highp' }),
       resources: {
         uP: this.P[0].source,
         uW: this.W[0].source,
+        uFx: this.paperFx.source,
         simUniforms: uniforms,
       },
     });
     const mesh = new Mesh({ geometry, shader });
+    // 칸만 덮어쓰고 나머지는 그대로 두므로 섞지 않고 바로 쓴다
+    mesh.blendMode = 'none';
     const stage = new Container();
     stage.addChild(mesh);
     return { mesh, stage, uniforms: shader.resources.simUniforms.uniforms };
@@ -196,7 +205,8 @@ export class InkSim {
       i++;
     }
     for (let k = i; k < this.stampPool.length; k++) this.stampPool[k].visible = false;
-    this.renderer.render({ container: this.stampLayer, target: this.P[this.cur], clear: false });
+    // 쉬는 칸은 계산하지 않으니, 두 장 모두에 똑같이 찍어 두어야 번갈아 보여도 같다
+    for (const t of this.P) this.renderer.render({ container: this.stampLayer, target: t, clear: false });
 
     // 같은 자리에 물도 붓는다
     let any = false;
@@ -209,16 +219,64 @@ export class InkSim {
       else sp.visible = false;
     }
     if (any) {
-      this.renderer.render({ container: this.stampLayer, target: this.W[this.cur], clear: false });
-      this.wetT = WET_HOLD;
+      for (const t of this.W) this.renderer.render({ container: this.stampLayer, target: t, clear: false });
+      for (const s of stamps) if (s.wet > 0) this.wetArea(s.x, s.y, s.r * 1.3 + 70);
     }
+  }
+
+  /** 먹물이 떨어진 둘레의 칸들을 깨운다(번져 나갈 자리까지) */
+  private wetArea(x: number, y: number, r: number): void {
+    const c0 = Math.max(0, Math.floor((x - r) / TILE));
+    const c1 = Math.min(this.cols - 1, Math.floor((x + r) / TILE));
+    const r0 = Math.max(0, Math.floor((y - r) / TILE));
+    const r1 = Math.min(this.rows - 1, Math.floor((y + r) / TILE));
+    for (let row = r0; row <= r1; row++) for (let c = c0; c <= c1; c++) this.wet[row * this.cols + c] = WET_HOLD;
+  }
+
+  /** 계산할 칸들로 사각형을 다시 짠다. 바래기는 그림 전체에 걸어야 하니 모든 칸을 편다 */
+  private layoutTiles(all: boolean): boolean {
+    let key = all ? 'all' : '';
+    let any = all;
+    if (!all) {
+      for (let i = 0; i < this.wet.length; i++) {
+        if (this.wet[i] > 0) {
+          key += `${i},`;
+          any = true;
+        }
+      }
+    }
+    if (!any || key === this.activeKey) return any;
+    this.activeKey = key;
+    const W = this.worldW;
+    const H = this.worldH;
+    for (const g of this.geometries) {
+      const pos = g.positions;
+      const uv = g.uvs;
+      for (let i = 0; i < this.wet.length; i++) {
+        const o = i * 8;
+        if (!all && this.wet[i] <= 0) {
+          pos.fill(0, o, o + 8);
+          uv.fill(0, o, o + 8);
+          continue;
+        }
+        const x0 = (i % this.cols) * TILE;
+        const y0 = Math.floor(i / this.cols) * TILE;
+        const x1 = Math.min(W, x0 + TILE);
+        const y1 = Math.min(H, y0 + TILE);
+        pos.set([x0, y0, x1, y0, x1, y1, x0, y1], o);
+        uv.set([x0 / W, y0 / H, x1 / W, y0 / H, x1 / W, y1 / H, x0 / W, y1 / H], o);
+      }
+      g.positions = pos;
+      g.uvs = uv;
+    }
+    return true;
   }
 
   /** 새 방 — 먹 자국과 물기를 모두 걷어 낸다 */
   clear(): void {
     const empty = new Container();
     for (const t of [...this.P, ...this.W]) this.renderer.render({ container: empty, target: t, clear: true, clearColor: [0, 0, 0, 0] });
-    this.wetT = 0;
+    this.wet.fill(0);
     this.fadeNext = 1;
   }
 
@@ -233,20 +291,21 @@ export class InkSim {
   }
 
   step(dt: number): void {
-    if (this.wetT <= 0 && this.fadeNext >= 1) return;
-    this.wetT -= dt;
+    // 쉬는 칸은 두 장의 텍스처가 이미 같은 값이라 건드리지 않아도 된다
+    if (!this.layoutTiles(this.fadeNext < 1)) return;
+    for (let i = 0; i < this.wet.length; i++) this.wet[i] -= dt;
     for (let i = 0; i < STEPS_PER_FRAME; i++) {
       const a = this.cur;
       const b = 1 - a;
       // 물
       this.water.mesh.shader!.resources.uW = this.W[a].source;
-      this.renderer.render({ container: this.water.stage, target: this.W[b], clear: true, clearColor: [0, 0, 0, 0] });
+      this.renderer.render({ container: this.water.stage, target: this.W[b], clear: false });
       // 안료 (새로 흐른 물을 기준으로)
       const sh = this.pigment.mesh.shader!;
       sh.resources.uP = this.P[a].source;
       sh.resources.uW = this.W[b].source;
       this.pigment.uniforms.uFade = i === 0 ? this.fadeNext : 1;
-      this.renderer.render({ container: this.pigment.stage, target: this.P[b], clear: true, clearColor: [0, 0, 0, 0] });
+      this.renderer.render({ container: this.pigment.stage, target: this.P[b], clear: false });
       this.cur = b;
     }
     this.fadeNext = 1;
