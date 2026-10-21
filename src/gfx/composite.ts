@@ -97,8 +97,8 @@ void main() {
     // 피격 — 화면 가장자리에 붉은 먹이 번진다
     vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * wp;
     float n = vnoise(q * 0.035 + uTime) * 0.65 + vnoise(wp * 0.11 - uTime) * 0.35;
-    float rim = smoothstep(0.18, 0.5, length(dv * vec2(1.0, 1.2)) + (n - 0.5) * 0.14);
-    col = mix(col, vec3(0.58, 0.12, 0.09), rim * uFlash * 0.55);
+    float rim = smoothstep(0.3, 0.62, length(dv * vec2(1.0, 1.2)) + (n - 0.5) * 0.16);
+    col = mix(col, vec3(0.58, 0.12, 0.09), rim * min(uFlash, 1.0) * 0.5);
   }
   finalColor = vec4(col, 1.0);
 }

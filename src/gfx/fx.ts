@@ -6,6 +6,7 @@ import { type Vec, TAU, clamp, easeOutCubic, lerp } from '../core/math';
 import { mulberry32 } from '../core/rng';
 import { INKS, inkColor } from '../ink';
 import type { Enemy, Gate, Player, Projectile, Ring, Trace, Zone } from '../game/types';
+import { LAND_R, SWIPE_HALF, SWIPE_REACH } from '../game/boss';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, mix } from '../render/color';
 import { ROBE } from '../render/sprites';
@@ -240,6 +241,110 @@ export function drawTrace(sb: SB, tr: Trace): void {
       const sweep = tr.dir * 2.4 * e;
       sb.stroke(arcPoints(tr.x, tr.y, 30, start, sweep, 16, 58), { width: W, color: col, alpha, dryness: 0.05, wet: 1, taperIn: 0.25, taperOut: 0.5, seed: tr.seed });
       break;
+    }
+    case 'claw': {
+      // 묵호의 앞발 — 나란한 발톱 자국 셋이 부채꼴을 가로지른다
+      const half = tr.arc / 2;
+      const start = tr.aim - tr.dir * half * 0.85;
+      const sweep = tr.dir * half * 1.7 * e;
+      if (Math.abs(sweep) < 0.05) return;
+      for (let i = -1; i <= 1; i++) {
+        const r0 = tr.reach * 0.62 + i * 13;
+        const pts = arcPoints(tr.x, tr.y, r0, start + i * tr.dir * 0.08, sweep, 14, r0 + 10, 0.8);
+        sb.stroke(pts, { width: W * 2.4, color: INK, alpha: alpha * 0.28, dryness: 0.7, taperIn: 0.3, taperOut: 0.5, seed: tr.seed + 10 + i, wet: 0.5 });
+        inkStroke(sb, pts, { width: W * (1 - Math.abs(i) * 0.2), color: col, alpha, dryness: 0.35, taperIn: 0.35, taperOut: 0.7, seed: tr.seed + i, wet: 0.3 }, tr.ink);
+      }
+      break;
+    }
+    case 'rake': {
+      // 내달린 자리 — 바닥을 긁고 지나간 마른 붓
+      const len = tr.length * e;
+      if (len < 6) return;
+      const dx = Math.cos(tr.aim);
+      const dy = Math.sin(tr.aim);
+      const pts = [0, 0.33, 0.66, 1].map((k) => ({ x: tr.x + dx * len * k + (rng() - 0.5) * 6, y: tr.y + dy * len * k + (rng() - 0.5) * 6 }));
+      inkStroke(sb, pts, { width: W, color: col, alpha: alpha * 0.7, dryness: 0.78, taperIn: 0.05, taperOut: 0.35, seed: tr.seed, wet: 0.2, bristles: 14 }, tr.ink);
+      for (const off of [-1, 1]) {
+        sb.stroke(pts.map((p) => ({ x: p.x - dy * off * W * 0.55, y: p.y + dx * off * W * 0.55 })), {
+          width: 3,
+          color: INK,
+          alpha: alpha * 0.55,
+          dryness: 0.8,
+          taperIn: 0.1,
+          taperOut: 0.5,
+          seed: tr.seed + 5 + off,
+        });
+      }
+      break;
+    }
+  }
+}
+
+/** 붉은 먹으로 미리 그려 보이는 묵호의 다음 수 */
+const TELL: RGB = [172, 50, 38];
+
+export function drawTigerTells(sb: SB, e: Enemy, t: number): void {
+  const b = e.boss;
+  if (!b) return;
+  switch (b.move) {
+    case 'swipe': {
+      if (b.t >= b.wind) return;
+      const k = b.t / b.wind;
+      const aim = Math.atan2(b.ay, b.ax);
+      const a = 0.35 + 0.6 * k;
+      const cy = e.y - 10;
+      sb.stroke(arcPoints(e.x, cy, SWIPE_REACH, aim - SWIPE_HALF, SWIPE_HALF * 2, 24, SWIPE_REACH, 0.8), {
+        width: 7,
+        color: TELL,
+        alpha: a,
+        dryness: 0.6,
+        taperIn: 0.2,
+        taperOut: 0.2,
+        seed: e.seed + 1,
+        progress: Math.min(1, k * 1.6),
+      });
+      for (const s of [-1, 1]) {
+        const ang = aim + s * SWIPE_HALF;
+        sb.stroke([{ x: e.x + Math.cos(ang) * 46, y: cy + Math.sin(ang) * 46 * 0.8 }, { x: e.x + Math.cos(ang) * SWIPE_REACH, y: cy + Math.sin(ang) * SWIPE_REACH * 0.8 }], {
+          width: 2.4,
+          color: TELL,
+          alpha: a * 0.7,
+          dryness: 0.7,
+          taperIn: 0.4,
+          taperOut: 0.1,
+          seed: e.seed + 3 + s,
+        });
+      }
+      // 차오르는 기운 — 부채꼴을 안쪽부터 옅은 붉은 먹으로 메운다
+      const rr = SWIPE_REACH * (0.3 + 0.38 * k);
+      sb.stroke(arcPoints(e.x, cy, rr, aim - SWIPE_HALF * 0.92, SWIPE_HALF * 1.84, 20, rr, 0.8), {
+        width: SWIPE_REACH * 0.62 * k,
+        color: TELL,
+        alpha: 0.1 + 0.12 * k,
+        dryness: 0.6,
+        wet: 0.6,
+        taperIn: 0.2,
+        taperOut: 0.2,
+        seed: e.seed + 7,
+      });
+      return;
+    }
+    case 'crouch':
+    case 'leap': {
+      const k = b.move === 'crouch' ? clamp(b.t / b.dur, 0, 1) : 1;
+      const pulse = 1 + 0.03 * Math.sin(t * 18);
+      ring(sb, b.tx, b.ty, LAND_R * pulse, 4.5, TELL, 0.3 + 0.45 * k, e.seed + 11, 0.55, 0.7, Math.min(1, k * 1.5));
+      ring(sb, b.tx, b.ty, LAND_R * 0.55 * k, 9 * k, TELL, 0.12 + 0.12 * k, e.seed + 12, 0.85, 0.7);
+      return;
+    }
+    case 'aim': {
+      const k = clamp(b.t / b.dur, 0, 1);
+      const len = Math.hypot(b.tx - e.x, b.ty - e.y);
+      if (len < 10) return;
+      const pts = [{ x: e.x, y: e.y }, { x: b.tx, y: b.ty }];
+      sb.stroke(pts, { width: 4 + 26 * k * k, color: TELL, alpha: 0.12 + 0.12 * k, dryness: 0.85, taperIn: 0.05, taperOut: 0.05, seed: e.seed + 21, progress: Math.min(1, k * 2) });
+      sb.stroke(pts, { width: 3, color: TELL, alpha: 0.35 + 0.4 * k, dryness: 0.55, taperIn: 0.1, taperOut: 0.3, seed: e.seed + 22, progress: Math.min(1, k * 2) });
+      return;
     }
   }
 }

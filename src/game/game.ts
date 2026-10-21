@@ -4,6 +4,7 @@ import { randomSeed } from '../core/rng';
 import { INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
 import { type RGB, DAMMUK, INK, SEAL } from '../render/color';
 import { BRUSH_WIELDER, type CharacterDef, critChance } from './characters';
+import { TIGER_BODY, tigerHitCircles, untouchable, updateTiger } from './boss';
 import { ENEMY_KINDS, makeEnemy, thinkEnemy } from './enemies';
 import { type Item, rollRewards, springItems, startingItems } from './items';
 import { BASE_DAMAGE, type Move, inShape, shapeCenter } from './moves';
@@ -120,6 +121,8 @@ function makePlayer(c: CharacterDef): Player {
     attackSpeed: 1,
     moveMul: 1,
     dashCdMul: 1,
+    kx: 0,
+    ky: 0,
   };
 }
 
@@ -295,6 +298,15 @@ export class Game {
     }
     this.roomPhase = 'fight';
     const el = def.el ? INKS[def.el].hanja : '';
+    if (def.kind === 'boss') {
+      // 주인은 담장 위에서 내려다보다 뛰어내린다 — 이름은 포효할 때 걸린다
+      this.beats = [];
+      this.beatIndex = 0;
+      this.beatDelay = 0;
+      this.addEnemy('tiger', def.el ?? 'heuk', WORLD_W / 2, 150, 1, false);
+      this.sounds.push({ type: 'wave' });
+      return;
+    }
     this.banner = { title: where, sub: `${el} 먹귀 · ${info.name} — ${info.desc}`, t: 0, dur: 2.8, color: INK };
     this.sounds.push({ type: 'wave' });
     if (def.kind === 'hold') {
@@ -385,13 +397,16 @@ export class Game {
     this.cleared.push(this.room);
     this.clearedVersion++;
     this.sounds.push({ type: 'seal' });
-    this.banner = { title: '한 폭을 그려 내다', sub: `${CHAPTER.name} · ${numeral(this.room.depth + 1)} 방에 낙관을 찍는다`, t: 0, dur: 2.0, color: INK };
+    this.banner =
+      this.room.kind === 'boss'
+        ? { title: '대숲의 주인을 그려 내다', sub: `${CHAPTER.name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
+        : { title: '한 폭을 그려 내다', sub: `${CHAPTER.name} · ${numeral(this.room.depth + 1)} 방에 낙관을 찍는다`, t: 0, dur: 2.0, color: INK };
   }
 
   private offerClearRewards(): void {
     const def = this.room;
     this.absorbPickups();
-    this.rewards = rollRewards(this.ink.values, this.ink.dominant, { guarantee: def.el, relic: def.kind === 'elite' });
+    this.rewards = rollRewards(this.ink.values, this.ink.dominant, { guarantee: def.el, relic: def.kind === 'elite' || def.kind === 'boss' });
     this.rewardTitle = `${numeral(def.depth + 1)} 방을 그려 내다`;
     this.rewardFor = 'clear';
     const pl = this.player;
@@ -481,14 +496,14 @@ export class Game {
     return !!pond && Math.hypot(x - pond.x, (y - pond.y) / 0.6) < pond.r;
   }
 
-  private insideObstacle(x: number, y: number, pad: number): boolean {
+  insideObstacle(x: number, y: number, pad: number): boolean {
     for (const o of this.layout.obstacles) if (Math.hypot(x - o.x, (y - o.y) / OBSTACLE_SQUASH) < o.r + pad) return true;
     const pond = this.layout.pond;
     return !!pond && Math.hypot(x - pond.x, (y - pond.y) / 0.6) < pond.r + pad;
   }
 
   /** 붓잡이와 떨어진, 막히지 않은 자리 */
-  private findSpawn(minDist: number): { x: number; y: number } {
+  findSpawn(minDist: number): { x: number; y: number } {
     const pl = this.player;
     let best = { x: WORLD_W / 2, y: WALL_TOP + 80 };
     let bestD = -1;
@@ -506,7 +521,7 @@ export class Game {
     return best;
   }
 
-  private freeSpot(x: number, y: number, r: number): { x: number; y: number } {
+  freeSpot(x: number, y: number, r: number): { x: number; y: number } {
     const p = { x: clamp(x, WALL + r, WORLD_W - WALL - r), y: clamp(y, WALL_TOP + r, WORLD_H - WALL - r) };
     this.pushOut(p, r);
     return p;
@@ -688,9 +703,13 @@ export class Game {
     }
   }
 
-  addEnemy(kind: EnemyKind, el: InkId, x: number, y: number, hpMul = 1): Enemy {
+  addEnemy(kind: EnemyKind, el: InkId, x: number, y: number, hpMul = 1, rise = true): Enemy {
     const e = makeEnemy(kind, el, x, y, hpMul);
     this.enemies.push(e);
+    if (!rise) {
+      e.spawnT = 0;
+      return e;
+    }
     this.stamps.push({ kind: 'splat', x, y: y + 2, r: e.r * 1.1, color: inkColor(el), alpha: 0.32, seed: e.seed, rot: Math.random() * TAU, wet: 1 });
     this.addRing('spawn', x, y, e.r * 0.4, e.r * 2.2, 0.6, 3, inkColor(el));
     return e;
@@ -739,8 +758,11 @@ export class Game {
       pl.vx += (mx * target - pl.vx) * k;
       pl.vy += (my * target - pl.vy) * k;
     }
-    pl.x = clamp(pl.x + pl.vx * dt, WALL, WORLD_W - WALL);
-    pl.y = clamp(pl.y + pl.vy * dt, this.topLimit(pl.x), WORLD_H - WALL);
+    const kd = Math.exp(-7 * dt);
+    pl.kx *= kd;
+    pl.ky *= kd;
+    pl.x = clamp(pl.x + (pl.vx + pl.kx) * dt, WALL, WORLD_W - WALL);
+    pl.y = clamp(pl.y + (pl.vy + pl.ky) * dt, this.topLimit(pl.x), WORLD_H - WALL);
     this.pushOut(pl, pl.r);
     const sp = Math.hypot(pl.vx, pl.vy);
     pl.moving = sp > 30;
@@ -884,10 +906,10 @@ export class Game {
     if (m.shape.type === 'none') return;
     const maxHits = m.hits ?? 1;
     for (const e of this.enemies) {
-      if (e.dead || e.spawnT > 0) continue;
+      if (!this.hittable(e)) continue;
       const n = a.hits.get(e.id) ?? 0;
       if (n >= maxHits || prog < n / maxHits) continue;
-      if (!inShape(a, prog, e.x, e.y - e.r * 0.5, e.r)) continue;
+      if (!this.bodyCircles(e).some((c) => inShape(a, prog, c.x, c.y, c.r))) continue;
       a.hits.set(e.id, n + 1);
       this.applyMoveHit(a, e);
     }
@@ -947,7 +969,8 @@ export class Game {
           break;
         }
       }
-      thinkEnemy(this, e, dt);
+      if (e.boss) updateTiger(this, e, dt);
+      else thinkEnemy(this, e, dt);
       const kdamp = Math.exp(-7 * dt);
       e.kx *= kdamp;
       e.ky *= kdamp;
@@ -981,6 +1004,10 @@ export class Game {
 
     for (const e of es) {
       if (e.dead || e.spawnT > 0) continue;
+      if (e.boss) {
+        this.tigerContact(e);
+        continue;
+      }
       e.x = clamp(e.x, WALL, WORLD_W - WALL);
       e.y = clamp(e.y, WALL_TOP, WORLD_H - WALL);
       this.pushOut(e, e.r * 0.8);
@@ -994,6 +1021,28 @@ export class Game {
         e.y = pl.y + (dy / d) * rr;
         if (e.stunT <= 0) this.hurtPlayer(e.dmg, e.el);
       }
+    }
+  }
+
+  /** 묵호는 무거워서 붓잡이를 밀어낸다. 닿기만 해서는 다치지 않는다 — 다치는 건 할퀴기·덮치기·내달리기 */
+  private tigerContact(e: Enemy): void {
+    const b = e.boss!;
+    if (b.move === 'perch' || b.move === 'descend') return;
+    e.x = clamp(e.x, WALL + 30, WORLD_W - WALL - 30);
+    e.y = clamp(e.y, WALL_TOP + 10, WORLD_H - WALL);
+    if (b.z > 0 || b.move === 'die') return;
+    this.pushOut(e, e.r * 0.8);
+    const pl = this.player;
+    const rx = TIGER_BODY.rx + pl.r;
+    const ry = TIGER_BODY.ry + pl.r;
+    const dx = pl.x - e.x;
+    const dy = pl.y - e.y;
+    const k = Math.hypot(dx / rx, dy / ry);
+    if (k < 1 && pl.dashT <= 0) {
+      const s = k > 0.0001 ? 1 / k : 1;
+      pl.x = e.x + (k > 0.0001 ? dx : 1) * s;
+      pl.y = e.y + (k > 0.0001 ? dy : 0) * s;
+      this.pushOut(pl, pl.r);
     }
   }
 
@@ -1076,8 +1125,8 @@ export class Game {
         continue;
       }
       for (const e of this.enemies) {
-        if (e.dead || e.spawnT > 0 || p.pierce.has(e.id)) continue;
-        if (Math.hypot(e.x - p.x, e.y - e.r * 0.5 - p.y) < e.r + p.r) {
+        if (!this.hittable(e) || p.pierce.has(e.id)) continue;
+        if (this.bodyCircles(e).some((c) => Math.hypot(c.x - p.x, c.y - p.y) < c.r + p.r)) {
           p.pierce.add(e.id);
           const crit = Math.random() < critChance(p.ink, p.potency);
           const a = Math.atan2(p.vy, p.vx);
@@ -1107,7 +1156,7 @@ export class Game {
       if (z.tick < 0.5) continue;
       z.tick -= 0.5;
       for (const e of this.enemies) {
-        if (e.dead || e.spawnT > 0 || Math.hypot(e.x - z.x, e.y - z.y) > z.r + e.r * 0.5) continue;
+        if (!this.hittable(e) || Math.hypot(e.x - z.x, e.y - z.y) > z.r + e.r * 0.5) continue;
         const ink: InkId = z.kind === 'pool' ? 'heuk' : z.kind === 'thorns' ? 'cheong' : 'jeok';
         this.damageEnemy(e, z.dps * 0.5, ink, { quiet: true });
         if (z.kind === 'thorns') e.rootT = Math.max(e.rootT, 0.3);
@@ -1198,13 +1247,68 @@ export class Game {
       }
       if (strong) this.hitstop = Math.max(this.hitstop, 0.025);
     }
-    if (e.hp <= 0) this.killEnemy(e, ink);
+    if (e.hp <= 0) {
+      if (e.boss) this.bossDown(e);
+      else this.killEnemy(e, ink);
+    }
+  }
+
+  /** 붓이 닿는 먹귀인지 — 솟는 중이거나 하늘 높이 뜬 묵호는 닿지 않는다 */
+  hittable(e: Enemy): boolean {
+    return !e.dead && e.spawnT <= 0 && !untouchable(e);
+  }
+
+  /** 맞는 자리 — 대부분 원 하나, 몸이 긴 묵호는 셋 */
+  private bodyCircles(e: Enemy): { x: number; y: number; r: number }[] {
+    return e.boss ? tigerHitCircles(e) : [{ x: e.x, y: e.y - e.r * 0.5, r: e.r }];
+  }
+
+  /** 묵호의 기력이 다했다 — 바로 사라지지 않고 먹을 토하며 스러진다 */
+  private bossDown(e: Enemy): void {
+    const b = e.boss!;
+    if (b.move === 'die') return;
+    e.hp = 0;
+    b.move = 'die';
+    b.t = 0;
+    b.dur = 2.1;
+    b.z = 0;
+    this.timeScale = 0.3;
+    this.hitstop = Math.max(this.hitstop, 0.18);
+    this.shake = Math.max(this.shake, 18);
+    this.sounds.push({ type: 'roar', big: true });
+    // 불려 온 먹귀들은 주인을 따라 흩어진다
+    for (const m of this.enemies) if (m !== e && !m.dead) this.killEnemy(m, null);
+  }
+
+  /** 마지막 숨 — 큰 먹 자국을 남기고 사라진다 */
+  finishBoss(e: Enemy): void {
+    const col = inkColor(e.el);
+    this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: 150, color: col, alpha: 0.5, seed: e.seed + 3, rot: Math.random() * TAU, wet: 1 });
+    this.stamps.push({ kind: 'splat', x: e.x + 30, y: e.y - 10, r: 90, color: INK, alpha: 0.4, seed: e.seed + 5, rot: Math.random() * TAU, wet: 1 });
+    this.addRing('burst', e.x, e.y - 40, 40, 320, 0.8, 22, col);
+    this.addRing('enso', e.x, e.y - 40, 60, 480, 1.2, 9, INK);
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * TAU;
+      const sp = rand(160, 620);
+      this.addParticle(e.x, e.y - 40, Math.cos(a) * sp, Math.sin(a) * sp * 0.7, rand(3, 8), i % 3 ? col : INK, 0.9, rand(0.4, 0.9), true);
+    }
+    this.sounds.push({ type: 'explode' });
+    this.timeScale = 0.25;
+    this.killEnemy(e, null);
+  }
+
+  /** 큰 일격에 붓잡이가 밀려난다 */
+  knockPlayer(dx: number, dy: number, power: number): void {
+    const pl = this.player;
+    const l = Math.hypot(dx, dy) || 1;
+    pl.kx += (dx / l) * power;
+    pl.ky += (dy / l) * power;
   }
 
   private killEnemy(e: Enemy, ink: InkId | null): void {
     e.dead = true;
     this.kills++;
-    this.sounds.push({ type: 'kill', big: e.kind === 'brute' });
+    this.sounds.push({ type: 'kill', big: e.kind === 'brute' || e.kind === 'tiger' });
     const col = inkColor(e.el);
     this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: e.r * 1.5, color: col, alpha: 0.5, seed: e.seed, rot: Math.random() * TAU, wet: 1 });
     this.addRing('burst', e.x, e.y - e.r * 0.4, e.r * 0.6, e.r * 2.6, 0.4, e.r * 0.35, col);
@@ -1215,12 +1319,13 @@ export class Game {
       this.addParticle(e.x, e.y - e.r * 0.4, Math.cos(a) * sp, Math.sin(a) * sp, rand(2, 5) * (e.r / 14), col, 0.9, rand(0.3, 0.6), true);
     }
     const def = ENEMY_KINDS[e.kind];
-    if (Math.random() < def.dropChance) {
+    if (e.loot > 0 || Math.random() < def.dropChance) {
       const a = Math.random() * TAU;
-      this.pickups.push({ x: e.x, y: e.y, vx: Math.cos(a) * 80, vy: Math.sin(a) * 80, ink: e.el, amount: def.dropAmount, t: 0, life: 16, seed: e.seed, dead: false });
+      this.pickups.push({ x: e.x, y: e.y, vx: Math.cos(a) * 80, vy: Math.sin(a) * 80, ink: e.el, amount: e.loot || def.dropAmount, t: 0, life: 16, seed: e.seed, dead: false });
     }
-    this.hitstop = Math.max(this.hitstop, e.kind === 'brute' ? 0.09 : 0.02);
-    this.shake = Math.max(this.shake, e.kind === 'brute' ? 10 : 3);
+    const big = e.kind === 'brute' || e.kind === 'tiger';
+    this.hitstop = Math.max(this.hitstop, big ? 0.09 : 0.02);
+    this.shake = Math.max(this.shake, big ? 10 : 3);
     if (e.burnStacks > 0 && ink !== null) this.explode(e.x, e.y, 46 + 10 * e.burnStacks, e.burnPower * 1.6 + 4, e.id);
   }
 
@@ -1237,7 +1342,7 @@ export class Game {
     }
     this.shake = Math.max(this.shake, 6);
     for (const e of this.enemies) {
-      if (e.dead || e.id === sourceId || e.spawnT > 0) continue;
+      if (!this.hittable(e) || e.id === sourceId) continue;
       if (Math.hypot(e.x - x, e.y - y) < r + e.r) {
         e.burnStacks = Math.min(6, e.burnStacks + 1);
         e.burnT = 3;
@@ -1248,9 +1353,10 @@ export class Game {
     }
   }
 
-  hurtPlayer(dmg: number, el: InkId | null): void {
+  /** 피했거나 무적이면 false */
+  hurtPlayer(dmg: number, el: InkId | null): boolean {
     const pl = this.player;
-    if (pl.invuln > 0 || pl.dashT > 0 || this.phase !== 'play') return;
+    if (pl.invuln > 0 || pl.dashT > 0 || this.phase !== 'play') return false;
     pl.hp -= dmg;
     this.sounds.push({ type: 'hurt' });
     pl.invuln = 0.75;
@@ -1264,6 +1370,7 @@ export class Game {
       const a = Math.random() * TAU;
       this.addParticle(pl.x, pl.y - 18, Math.cos(a) * rand(80, 200), Math.sin(a) * rand(80, 200), rand(1.5, 3.5), SEAL, 0.8, rand(0.3, 0.5), true);
     }
+    return true;
   }
 
   healPlayer(n: number): void {
@@ -1325,6 +1432,14 @@ export class Game {
   /** 아직 나타나지 않은 먹귀 무리 수 */
   get beatsLeft(): number {
     return Math.max(0, this.beats.length - this.beatIndex);
+  }
+
+  /** 시험용: 곧장 어느 방으로 들어간다 (?boss) */
+  debugRoom(def: RoomDef): void {
+    this.startRun('explore');
+    this.ink.apply({ [def.el ? counterOf(def.el) : 'heuk']: 40, [INK_ORDER[(INK_ORDER.indexOf(def.el ?? 'heuk') + 2) % 5]]: 30 });
+    this.enterRoom(def);
+    this.setPhase('play');
   }
 
   debugInk(id: InkId, amount: number): void {

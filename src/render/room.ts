@@ -63,6 +63,7 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
   }
 
   if (layout.pond) paintPond(ctx, layout.pond.x, layout.pond.y, layout.pond.r, rng);
+  if (def.kind === 'boss') paintTigerSigns(ctx, w, h, rng, blocked);
   paintSteppingStones(ctx, w, h, rng);
   paintWall(ctx, w, rng);
   paintBorder(ctx, w, h, rng);
@@ -122,6 +123,56 @@ function paintWall(ctx: Ctx, w: number, rng: Rng): void {
   for (let x = 6; x < w; x += 17) {
     dot(ctx, x, roofY + 10, 4.2, INK, 0.75, Math.floor(rng() * 1e6));
     brushStroke(ctx, [{ x, y: roofY - 8 }, { x: x + 2, y: roofY + 6 }], { width: 2, color: INK, alpha: 0.35, dryness: 0.6, seed: Math.floor(rng() * 1e6) });
+  }
+}
+
+/* ───────── 주인의 방 ───────── */
+
+/** 범이 다녀간 흔적 — 담장에서 내려온 발자국과 묵은 발톱 자국 */
+function paintTigerSigns(ctx: Ctx, w: number, h: number, rng: Rng, blocked: (x: number, y: number, pad: number) => boolean): void {
+  // 담장 아래에서 한가운데로 비스듬히 걸어 내려온 발자국
+  let x = w / 2 + range(rng, -60, 60);
+  let y = WALL_TOP + 40;
+  let a = Math.PI / 2 + range(rng, -0.4, 0.4);
+  for (let i = 0; i < 14; i++) {
+    const side = i % 2 ? 1 : -1;
+    const px = x + Math.cos(a + Math.PI / 2) * 11 * side;
+    const py = y + Math.sin(a + Math.PI / 2) * 11 * side * 0.7;
+    if (!blocked(px, py, 0)) pawPrint(ctx, px, py, a, 0.32 - i * 0.012, Math.floor(rng() * 1e6));
+    x += Math.cos(a) * 42;
+    y += Math.sin(a) * 42 * 0.75;
+    a += range(rng, -0.25, 0.25);
+  }
+  // 바닥을 긁은 묵은 발톱 자국
+  for (let k = 0; k < 4; k++) {
+    const cx = range(rng, 260, w - 260);
+    const cy = range(rng, WALL_TOP + 160, h - 220);
+    if (blocked(cx, cy, 40) || Math.hypot(cx - w / 2, cy - h / 2) < 140) continue;
+    const ang = range(rng, 0, TAU);
+    const len = range(rng, 60, 90);
+    for (let i = -1; i <= 1; i++) {
+      const ox = Math.cos(ang + Math.PI / 2) * i * 11;
+      const oy = Math.sin(ang + Math.PI / 2) * i * 11 * 0.7;
+      const pts = [0, 0.5, 1].map((t) => ({
+        x: cx + ox + Math.cos(ang) * len * (t - 0.5) + Math.cos(ang + Math.PI / 2) * Math.sin(t * Math.PI) * 6,
+        y: cy + oy + (Math.sin(ang) * len * (t - 0.5) + Math.sin(ang + Math.PI / 2) * Math.sin(t * Math.PI) * 6) * 0.7,
+      }));
+      brushStroke(ctx, pts, { width: 4.5, color: DAMMUK, alpha: 0.32, dryness: 0.8, taperIn: 0.3, taperOut: 0.6, seed: Math.floor(rng() * 1e6) });
+    }
+  }
+}
+
+/** 범의 발자국 — 큰 발바닥 하나에 발가락 넷 */
+function pawPrint(ctx: Ctx, x: number, y: number, a: number, alpha: number, seed: number): void {
+  if (alpha <= 0.04) return;
+  const fx = Math.cos(a);
+  const fy = Math.sin(a) * 0.7;
+  inkBlob(ctx, x, y, 5.5, { color: DAMMUK, alpha, seed, wobble: 0.2, squash: 0.7, halo: 0.3 });
+  for (let i = 0; i < 4; i++) {
+    const s = (i - 1.5) * 0.5;
+    const tx = x + fx * 8 + Math.cos(a + Math.PI / 2) * s * 9;
+    const ty = y + fy * 8 + Math.sin(a + Math.PI / 2) * s * 9 * 0.7;
+    inkBlob(ctx, tx, ty, 2.3, { color: DAMMUK, alpha: alpha * 0.9, seed: seed + i + 1, wobble: 0.2, squash: 0.8, halo: 0.2 });
   }
 }
 

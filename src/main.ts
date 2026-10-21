@@ -10,12 +10,13 @@ import { Game, type InputFrame } from './game/game';
 import { WORLD_H, WORLD_W } from './game/types';
 import { View } from './gfx/view';
 import { ResolutionGovernor } from './gfx/governor';
-import { INK_ORDER, inkName } from './ink';
+import { INK_ORDER, type InkId, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
 import { CHAPTER, ROOM_KINDS } from './game/rooms';
 import { Input } from './input';
 import { UI } from './ui';
 import { setupGallery } from './gallery';
+import { showArtSheet } from './artsheet';
 
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
@@ -39,6 +40,8 @@ function canvasGlyphs(): string {
     '방 문이 열리다 문에 적힌 먹과 방을 보고 길을 고른다 문을 골라 지나간다 남은 무리',
     '한 폭을 그려 내다 낙관을 찍는다 샘에 다가가 먹을 씻는다 화첩을 덮는다 다 그리다 마지막 문을 지나',
     `${CHAPTER.name}${CHAPTER.hanja}一二三四五六終`,
+    '묵호 · 대숲의 주인 墨虎 · 대숲의 주인이 내려온다 을 두르다 묵호가 먹으로 갈아입는다 — 먹이 이긴다',
+    '대숲의 주인을 그려 내다 의 마지막 폭에 낙관을 찍는다',
     ...Object.values(ROOM_KINDS).flatMap((k) => [k.name, k.hanja, k.desc]),
   ];
   for (const c of CHARACTERS) {
@@ -62,6 +65,11 @@ async function loadFonts(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
+  const sheet = params.get('sheet');
+  if (sheet) {
+    showArtSheet(sheet);
+    return;
+  }
   const host = document.getElementById('app')!;
   const loading = document.createElement('div');
   loading.className = 'loading';
@@ -132,6 +140,12 @@ async function boot(): Promise<void> {
 
   let last = performance.now();
   const loop = (now: number): void => {
+    // 시험용: 화면을 잡아 두고 들여다볼 때 (window.__hold = true)
+    if ((window as { __hold?: boolean }).__hold) {
+      last = now;
+      requestAnimationFrame(loop);
+      return;
+    }
     // 첫 프레임의 시각은 등록한 때보다 앞설 수 있다 — 거꾸로 흐르지 않게 막는다
     const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
     if (!FORCED_RES && !freeze && !document.hidden) governor.frame(now - last);
@@ -157,24 +171,32 @@ async function boot(): Promise<void> {
   };
   requestAnimationFrame(loop);
 
+  // 시험용: 곧장 대숲의 주인에게 (?boss 또는 ?boss=jeok)
+  if (params.has('boss')) {
+    const el = (INK_ORDER as readonly string[]).includes(params.get('boss') ?? '') ? (params.get('boss') as InkId) : 'heuk';
+    game.debugRoom({ kind: 'boss', el, depth: CHAPTER.rooms - 1, seed: 4242 });
+  }
+
   if (DEMO) {
     game.onPhase = ((orig) => (p) => {
       orig?.(p);
       if (p === 'reward') setTimeout(() => game.chooseReward(game.rewards[Math.floor(Math.random() * game.rewards.length)]), 600);
       if (p === 'over') setTimeout(() => game.startRun(), 2000);
     })(game.onPhase);
-    game.startRun();
+    if (!params.has('boss')) game.startRun();
   }
 
   /** 시험용: 시연 입력으로 게임을 빨리 감는다 */
-  const step = (sec: number): void => {
+  // 시연 붓잡이의 시계 — 그리지 않고 빨리 감을 때도 게임 시간만큼 흐른다
+  let demoClock = 0;
+  const step = (sec: number, draw = true): void => {
     const n = Math.round(sec * 60);
     for (let i = 0; i < n; i++) {
       if (game.phase === 'reward') game.chooseReward(game.rewards[Math.floor(Math.random() * game.rewards.length)]);
-      const t = performance.now() / 1000 + i / 60;
-      game.update(1 / 60, demoInput(game, t));
+      demoClock += 1 / 60;
+      game.update(1 / 60, demoInput(game, demoClock));
       game.sounds.length = 0;
-      if (i % 90 === 0 || i === n - 1) view.render(game, 1 / 60);
+      if (draw && (i % 90 === 0 || i === n - 1)) view.render(game, 1 / 60);
     }
   };
   Object.assign(window, { __game: game, __view: view, __governor: governor, __step: step, __ready: true });

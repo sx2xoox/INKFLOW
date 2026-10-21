@@ -4,6 +4,7 @@
 import { Container, Sprite, Texture } from 'pixi.js';
 import { TAU, clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
+import type { Enemy } from '../game/types';
 import { INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
 import { numeral } from '../game/game';
 import { CHAPTER, ROOM_KINDS } from '../game/rooms';
@@ -30,6 +31,8 @@ export class Hud {
   private used = 0;
   private shownHp = 100;
   private ghostHp = 100;
+  private bossShown = -1;
+  private bossGhost = 1;
   private w = 1280;
   private h = 760;
   /** 화면 표시 글자는 기기 픽셀에 1:1로 굽는다 */
@@ -212,7 +215,10 @@ export class Hud {
         });
       }
       const sy = m + 66;
-      if (g.roomPhase === 'fight' && room.kind !== 'hold') {
+      const boss = room.kind === 'boss' ? g.enemies.find((e) => e.boss) : undefined;
+      if (boss) {
+        this.bossBar(boss, sy);
+      } else if (g.roomPhase === 'fight' && room.kind !== 'hold') {
         const left = g.beatsLeft;
         this.label(left > 0 ? `먹귀 ${g.enemies.length} · 남은 무리 ${left}` : `남은 먹귀 ${g.enemies.length}`, w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
       } else if (g.roomPhase === 'spring') {
@@ -221,7 +227,7 @@ export class Hud {
         this.label('문을 골라 지나간다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
       }
       if (room.kind === 'hold' && wave && g.roomPhase === 'fight') this.timerBar(wave, sy);
-      if (g.roomPhase === 'fight') themes = wave ? wave.themes : room.el ? [room.el] : [];
+      if (g.roomPhase === 'fight') themes = boss ? [boss.el] : wave ? wave.themes : room.el ? [room.el] : [];
     } else {
       if (!wave) return;
       this.label(`${numeral(wave.n)} 물결`, w / 2, m + 12, { size: 30, color: INK, font: BRUSH_FONT, weight: 400, halo: 2 });
@@ -244,6 +250,52 @@ export class Hud {
     const counters = themes.map((el) => INK_ORDER.find((id) => OVERCOMES[id] === el)!);
     const hint = counters.map((c) => INKS[c].hanja).join(' ');
     this.label(`유리한 먹  ${hint}`, rx, m + 64, { size: 13, color: INK, halo: 2, weight: 700 }, 1, 0.5, 0.8);
+  }
+
+  /** 대숲의 주인 — 이름과 긴 기력 획. 2/3, 1/3 자리에 포효할 마디가 있다 */
+  private bossBar(e: Enemy, y: number): void {
+    const b = e.boss!;
+    if (b.roared < 1) {
+      this.bossShown = 1;
+      this.bossGhost = 1;
+      return;
+    }
+    const appear = b.roared > 1 || b.move !== 'roar' ? 1 : clamp((b.t - 0.3) / 0.5, 0, 1);
+    const w = this.w;
+    // 왼쪽 위 콤보 표시와 겹치지 않을 만큼
+    const L = clamp(w - 760, 220, 460);
+    const x0 = w / 2 - L / 2;
+    const by = y + 22;
+    const fr = clamp(e.hp / e.maxHp, 0, 1);
+    this.bossShown = this.bossShown < 0 ? fr : lerp(this.bossShown, fr, 0.25);
+    this.bossGhost = fr < this.bossGhost ? lerp(this.bossGhost, fr, 0.03) : fr;
+    const col = INKS[e.el].color;
+    this.label('묵호 · 대숲의 주인', w / 2, y, { size: 15, color: INK, halo: 2.2, weight: 900 }, 0.5, 0.5, appear);
+    this.strokes.stroke([{ x: x0, y: by }, { x: x0 + L * 0.5, y: by - 2 }, { x: x0 + L, y: by }], { width: 13, color: DAMMUK, alpha: 0.16 * appear, dryness: 0.7, taperIn: 0.02, taperOut: 0.04, seed: 140 });
+    if (this.bossGhost > 0.005) {
+      this.strokes.stroke([{ x: x0, y: by }, { x: x0 + L * this.bossGhost, y: by - 1 }], { width: 11, color: mix(SEAL, PAPER_LIGHT, 0.5), alpha: 0.65 * appear, dryness: 0.45, taperIn: 0.02, taperOut: 0.1, seed: 141 });
+    }
+    if (this.bossShown > 0.005) {
+      const bar = e.el === 'baek' ? mix(col, INK, 0.35) : col;
+      this.strokes.stroke([{ x: x0, y: by }, { x: x0 + L * this.bossShown * 0.5, y: by - 1.5 }, { x: x0 + L * this.bossShown, y: by - 0.5 }], {
+        width: 12,
+        color: bar,
+        alpha: 0.95 * appear,
+        dryness: 0.35,
+        taperIn: 0.02,
+        taperOut: 0.12,
+        seed: 142,
+      });
+    }
+    // 포효할 마디
+    for (const k of [1 / 3, 2 / 3]) {
+      const x = x0 + L * k;
+      this.strokes.stroke([{ x: x - 1, y: by - 11 }, { x: x + 1, y: by + 10 }], { width: 2.6, color: INK, alpha: 0.75 * appear, dryness: 0.4, taperIn: 0.2, taperOut: 0.2, seed: 150 + k * 10 });
+    }
+    // 두른 먹
+    const bx = x0 - 22;
+    this.frame(`blob/${e.seed % 6}`, bx, by, 13 / BLOB_R, col, 0.95 * appear);
+    this.label(INKS[e.el].hanja, bx, by, { size: 15, color: e.el === 'baek' ? INK : PAPER_LIGHT, weight: 900 }, 0.5, 0.5, appear);
   }
 
   private timerBar(wave: NonNullable<Game['wave']>, y: number): void {
@@ -341,7 +393,7 @@ export class Hud {
     const outA = clamp((b.dur - b.t) / 0.6, 0, 1);
     const a = Math.min(inA, outA);
     const x = this.w / 2;
-    const y = this.h * 0.24;
+    const y = this.h * (b.low ? 0.68 : 0.24);
     const L = 280 * Math.min(1, b.t / 0.5);
     this.strokes.stroke([{ x: x - L / 2, y: y + 30 }, { x: x + L / 2, y: y + 28 }], { width: 7, color: INK, alpha: a * 0.8, dryness: 0.8, taperIn: 0.1, taperOut: 0.5, seed: 70 });
     this.label(b.title, x, y - 8, { size: 64, color: b.color, font: BRUSH_FONT, weight: 400, halo: 3 }, 0.5, 0.5, a, 0.94 + 0.06 * inA);

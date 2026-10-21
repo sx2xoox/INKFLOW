@@ -66,9 +66,53 @@ export interface Player {
   attackSpeed: number;
   moveMul: number;
   dashCdMul: number;
+  /** 큰 일격에 밀려나는 속도 */
+  kx: number;
+  ky: number;
 }
 
-export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad';
+export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'tiger';
+
+/**
+ * 묵호(墨虎)의 동작.
+ * perch: 담장 위에서 내려다본다 → descend: 뛰어내린다 → roar: 포효
+ * stalk: 어슬렁거리며 다가온다 / swipe: 앞발 할퀴기 / crouch → leap → rest: 덮치기
+ * aim → dash: 내달리기 / stagger: 부딪혀 휘청 / die: 쓰러진다
+ */
+export type TigerMove = 'perch' | 'descend' | 'roar' | 'stalk' | 'swipe' | 'crouch' | 'leap' | 'rest' | 'aim' | 'dash' | 'stagger' | 'die';
+
+export interface BossState {
+  move: TigerMove;
+  /** 지금 동작에 들어선 뒤의 시간 */
+  t: number;
+  dur: number;
+  /** 1..3 — 기력이 줄수록 사나워진다 */
+  phase: number;
+  /** 포효를 마친 단계 */
+  roared: number;
+  /** 겨누는 방향(단위 벡터) */
+  ax: number;
+  ay: number;
+  /** 동작의 시작점과 목표점 */
+  sx: number;
+  sy: number;
+  tx: number;
+  ty: number;
+  /** 공중에 뜬 높이 — 높이 뜨면 붓이 닿지 않는다 */
+  z: number;
+  /** 이번 동작이 이미 붓잡이를 쳤는지 */
+  hit: boolean;
+  /** 남은 연속 동작 수 */
+  chain: number;
+  /** 할퀴기를 내지르기까지의 시간 */
+  wind: number;
+  /** 어슬렁거릴 때 도는 쪽 */
+  side: 1 | -1;
+  pounceCd: number;
+  dashCd: number;
+  /** 내달리다 벽이나 바위에 막혔다 */
+  blocked: boolean;
+}
 
 export interface Enemy {
   id: number;
@@ -107,10 +151,13 @@ export interface Enemy {
   ty: number;
   /** 0..1 — 먹두꺼비가 먹을 뱉기 전 볼이 부푸는 정도 */
   charge: number;
+  /** 쓰러지면 반드시 떨구는 먹의 양(0이면 종류의 기본 확률을 따른다) */
+  loot: number;
+  boss: BossState | null;
 }
 
 /** 공격이 그림 위에 남기는 획. 판정과 별개로 잠시 남았다가 마른다. */
-export type Visual = 'sweep' | 'spin' | 'thrust' | 'whip' | 'slam' | 'burst' | 'quake' | 'vortex' | 'xslash' | 'cast';
+export type Visual = 'sweep' | 'spin' | 'thrust' | 'whip' | 'slam' | 'burst' | 'quake' | 'vortex' | 'xslash' | 'cast' | 'claw' | 'rake';
 
 export interface Trace {
   visual: Visual;
@@ -252,6 +299,8 @@ export interface Banner {
   t: number;
   dur: number;
   color: RGB;
+  /** 화면 아래쪽에 건다 — 위쪽의 무언가를 가리지 않게 */
+  low?: boolean;
 }
 
 /** 담장에 그려지는 달문. room이 없으면 장을 마치는 문이다. */

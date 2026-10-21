@@ -8,7 +8,7 @@ import { type Rng, mulberry32, randomSeed } from '../core/rng';
 import { INK_ORDER, type InkId } from '../ink';
 import { type EnemyKind, WALL, WORLD_H, WORLD_W } from './types';
 
-export type RoomKind = 'battle' | 'hold' | 'elite' | 'spring';
+export type RoomKind = 'battle' | 'hold' | 'elite' | 'spring' | 'boss';
 
 export interface RoomDef {
   kind: RoomKind;
@@ -30,13 +30,14 @@ export const ROOM_KINDS: Record<RoomKind, RoomKindInfo> = {
   hold: { name: '버티기', hanja: '守', desc: '몰려드는 먹귀를 끝까지 견딘다' },
   elite: { name: '정예', hanja: '將', desc: '묵괴가 지키는 방' },
   spring: { name: '샘', hanja: '泉', desc: '먹을 씻고 기력을 되찾는다' },
+  boss: { name: '주인', hanja: '虎', desc: '대숲의 주인 묵호와 맞선다' },
 };
 
 export const CHAPTER = {
   name: '대숲',
   hanja: '竹',
-  /** 이 장의 방 개수 — 마지막 방은 정예 */
-  rooms: 4,
+  /** 이 장의 방 개수 — 마지막 방은 대숲의 주인, 그 앞 방에는 정예가 끼어 있다 */
+  rooms: 5,
 };
 
 /** 위쪽 담장 — 이보다 위로는 문으로만 지나간다 */
@@ -71,6 +72,7 @@ const range = (rng: Rng, a: number, b: number): number => a + rng() * (b - a);
 export function makeLayout(def: RoomDef): RoomLayout {
   const rng = mulberry32(def.seed);
   const obstacles: Obstacle[] = [];
+  if (def.kind === 'boss') return { obstacles: arenaEdge(rng), pond: null };
   const pond = def.kind === 'spring' ? { x: WORLD_W / 2, y: WORLD_H / 2 + 40, r: 120 } : null;
   const count = def.kind === 'elite' ? 4 : def.kind === 'spring' ? 6 : 5 + Math.floor(rng() * 3);
 
@@ -89,6 +91,24 @@ export function makeLayout(def: RoomDef): RoomLayout {
   return { obstacles, pond };
 }
 
+/** 주인의 방 — 가운데를 넓게 비우고 대숲이 둘레를 두른다 */
+function arenaEdge(rng: Rng): Obstacle[] {
+  const out: Obstacle[] = [];
+  const spots: [number, number][] = [
+    [WALL + 120, WALL_TOP + 150],
+    [WALL + 100, WORLD_H - WALL - 170],
+    [WORLD_W - WALL - 120, WALL_TOP + 150],
+    [WORLD_W - WALL - 100, WORLD_H - WALL - 170],
+  ];
+  for (const [x, y] of spots) {
+    out.push({ kind: 'bamboo', x: x + range(rng, -25, 25), y: y + range(rng, -20, 20), r: range(rng, 38, 46), seed: Math.floor(rng() * 1e6) });
+  }
+  // 바위 둘 — 내달리는 범이 머리를 박을 자리
+  out.push({ kind: 'rock', x: range(rng, 380, 520), y: range(rng, 560, 640), r: range(rng, 40, 50), seed: Math.floor(rng() * 1e6) });
+  out.push({ kind: 'rock', x: range(rng, 1080, 1220), y: range(rng, 560, 640), r: range(rng, 40, 50), seed: Math.floor(rng() * 1e6) });
+  return out;
+}
+
 /** 먹귀가 몇 무리로 나뉘어 나타나는지. 앞 무리가 trigger 마리 이하로 줄면 다음 무리가 온다. */
 export interface Beat {
   groups: [EnemyKind, number][];
@@ -97,6 +117,8 @@ export interface Beat {
 
 export function encounter(def: RoomDef): Beat[] {
   const d = def.depth;
+  // 주인은 따로 나타난다
+  if (def.kind === 'boss') return [];
   if (def.kind === 'elite') {
     return [
       { groups: [['brute', 1], ['toad', 2]], trigger: 0 },
@@ -134,14 +156,14 @@ export function firstRoom(): RoomDef {
 }
 
 /**
- * 다음 문들. 마지막 방(정예)을 넘기면 빈 배열 — 장이 끝난다.
- * 같은 방 종류에 같은 먹이 겹치지 않게 고른다.
+ * 다음 문들. 마지막 방(주인)을 넘기면 빈 배열 — 장이 끝난다.
+ * 주인 앞 방에서는 정예의 문이 하나 열린다. 같은 방 종류에 같은 먹이 겹치지 않게 고른다.
  */
 export function nextRooms(cleared: RoomDef): RoomDef[] {
   const depth = cleared.depth + 1;
   if (depth >= CHAPTER.rooms) return [];
   if (depth === CHAPTER.rooms - 1) {
-    return [{ kind: 'elite', el: INK_ORDER[Math.floor(Math.random() * 5)], depth, seed: randomSeed() }];
+    return [{ kind: 'boss', el: INK_ORDER[Math.floor(Math.random() * 5)], depth, seed: randomSeed() }];
   }
   const n = Math.random() < 0.35 ? 3 : 2;
   const els = [...INK_ORDER].sort(() => Math.random() - 0.5);
@@ -150,14 +172,15 @@ export function nextRooms(cleared: RoomDef): RoomDef[] {
   for (let i = 0; i < n; i++) {
     let kind: RoomKind = 'battle';
     const r = Math.random();
-    if (r < 0.28) kind = 'hold';
+    if (depth === CHAPTER.rooms - 2 && i === 0) kind = 'elite';
+    else if (r < 0.28) kind = 'hold';
     else if (r < 0.5 && !springUsed) {
       kind = 'spring';
       springUsed = true;
     }
     out.push({ kind, el: kind === 'spring' ? null : els[i], depth, seed: randomSeed() });
   }
-  return out;
+  return out.sort(() => Math.random() - 0.5);
 }
 
 /** 문이 담장 위에 놓이는 가로 자리 */

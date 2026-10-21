@@ -18,6 +18,7 @@ import {
   type SpriteDraw,
 } from '../render/sprites';
 import type { EnemyKind } from '../game/types';
+import { TIGER_FRAMES, type TigerPoseName, drawTiger } from '../render/tiger';
 import { Atlas } from './atlas';
 
 export const BLOB_VARIANTS = 6;
@@ -38,15 +39,36 @@ interface EnemyArt {
   period: number;
 }
 
-export const ENEMY_ART: Record<EnemyKind, EnemyArt> = {
+export const ENEMY_ART: Record<Exclude<EnemyKind, 'tiger'>, EnemyArt> = {
   drop: { draw: drawDrop, w: 46, h: 52, ox: 23, oy: 46, period: 1.1 },
   swallow: { draw: drawSwallow, w: 72, h: 64, ox: 38, oy: 32, period: 0.34 },
   toad: { draw: drawToad, w: 84, h: 62, ox: 42, oy: 52, period: 1.6 },
   brute: { draw: drawBrute, w: 116, h: 120, ox: 58, oy: 110, period: 1.4 },
 };
 
-export const enemyFrame = (kind: EnemyKind, el: InkId, f: number): string => `enemy/${kind}/${el}/${f}`;
-export const enemyWhite = (kind: EnemyKind, f: number): string => `enemy/${kind}/white/${f}`;
+/** 묵호 그림 상자 — 치켜든 앞발과 꼬리까지 들어가게 */
+export const TIGER_BOX = { w: 250, h: 188, ox: 124, oy: 176 };
+export const tigerFrame = (pose: TigerPoseName, f = 0, white = false): string => `tiger/${white ? 'white/' : ''}${pose}/${f}`;
+
+/**
+ * 묵호는 크고 붓질이 많아 따로 굽는다. 시작 화면이 떠 있는 동안 조금씩 굽고,
+ * 그 전에 필요해지면 남은 것을 한 번에 굽는다.
+ */
+export function tigerAtlas(): Atlas {
+  const at = new Atlas();
+  const B = TIGER_BOX;
+  const add = (pose: TigerPoseName, f: number): void => {
+    const draw = (c: CanvasRenderingContext2D): void => drawTiger(c, pose, f, 4400);
+    at.add(tigerFrame(pose, f), B.w, B.h, B.ox, B.oy, draw);
+    at.add(tigerFrame(pose, f, true), B.w, B.h, B.ox, B.oy, draw, 'white');
+  };
+  for (let f = 0; f < TIGER_FRAMES.walk; f++) add('walk', f);
+  for (const n of TIGER_FRAMES.names) add(n, 0);
+  return at;
+}
+
+export const enemyFrame = (kind: keyof typeof ENEMY_ART, el: InkId, f: number): string => `enemy/${kind}/${el}/${f}`;
+export const enemyWhite = (kind: keyof typeof ENEMY_ART, f: number): string => `enemy/${kind}/white/${f}`;
 
 export function buildAtlas(): Atlas {
   const at = new Atlas();
@@ -54,7 +76,7 @@ export function buildAtlas(): Atlas {
     at.add(`player/${f}`, 64, 82, 32, 76, (c) => drawPlayer(c, f));
     at.add(`player/white/${f}`, 64, 82, 32, 76, (c) => drawPlayer(c, f), 'white');
   }
-  for (const kind of Object.keys(ENEMY_ART) as EnemyKind[]) {
+  for (const kind of Object.keys(ENEMY_ART) as (keyof typeof ENEMY_ART)[]) {
     const art = ENEMY_ART[kind];
     for (let f = 0; f < ENEMY_FRAMES; f++) {
       for (const el of INK_ORDER) {

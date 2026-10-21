@@ -18,7 +18,9 @@ export type SoundEvent =
   | { type: 'spit' }
   | { type: 'seal' }
   | { type: 'gate' }
-  | { type: 'ui' };
+  | { type: 'ui' }
+  | { type: 'roar'; big: boolean }
+  | { type: 'claw' };
 
 /** 궁(C) 상(D) 각(E) 치(G) 우(A) */
 const NOTE: Record<InkId | 'plain', number> = {
@@ -147,7 +149,51 @@ export class Sound {
         this.tone(t, 820, 0.09, 0.25, 'sine');
         this.burst(t, 'bandpass', 1600, 0.03, 0.2);
         return;
+      case 'roar':
+        return this.roar(t, e.big);
+      case 'claw':
+        // 앞발이 공기를 찢는다
+        this.sweep(t, 300, 1400, 0.22, 0.5, 'bandpass');
+        this.burst(t + 0.06, 'highpass', 1800, 0.12, 0.3);
+        this.thump(t + 0.05, 140, 0.3, 0.12);
+        return;
     }
+  }
+
+  /** 범의 울음 — 낮게 떨리는 톱니파에 거친 숨을 섞는다 */
+  private roar(t: number, big: boolean): void {
+    const ctx = this.ctx!;
+    const dur = big ? 1.5 : 0.55;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(big ? 95 : 120, t);
+    o.frequency.linearRampToValueAtTime(big ? 140 : 150, t + dur * 0.25);
+    o.frequency.exponentialRampToValueAtTime(big ? 60 : 80, t + dur);
+    // 목이 떨리는 소리
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = big ? 28 : 34;
+    const lg = ctx.createGain();
+    lg.gain.value = 18;
+    lfo.connect(lg).connect(o.frequency);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(500, t);
+    f.frequency.linearRampToValueAtTime(big ? 1500 : 1100, t + dur * 0.3);
+    f.frequency.exponentialRampToValueAtTime(300, t + dur);
+    f.Q.value = 3;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(big ? 0.55 : 0.35, t + 0.08);
+    env.gain.setValueAtTime(big ? 0.5 : 0.3, t + dur * 0.5);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    env.connect(this.master);
+    o.connect(f).connect(env);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + dur + 0.05);
+    lfo.stop(t + dur + 0.05);
+    this.burst(t, 'bandpass', 700, dur * 0.8, big ? 0.35 : 0.2);
+    if (big) this.thump(t, 55, 0.7, 0.6);
   }
 
   private swing(t: number, ink: InkId | null, step: number): void {

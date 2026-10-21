@@ -3,6 +3,7 @@ import { clamp, rand } from '../core/math';
 import { randomSeed } from '../core/rng';
 import type { InkId } from '../ink';
 import type { Game } from './game';
+import { makeBossState } from './boss';
 import type { Enemy, EnemyKind } from './types';
 
 export interface EnemyKindDef {
@@ -21,6 +22,7 @@ export const ENEMY_KINDS: Record<EnemyKind, EnemyKindDef> = {
   swallow: { name: '먹제비', r: 11, hp: 15, speed: 118, dmg: 9, mass: 0.7, dropChance: 0.35, dropAmount: 4 },
   toad: { name: '먹두꺼비', r: 17, hp: 32, speed: 70, dmg: 7, mass: 1.6, dropChance: 0.5, dropAmount: 5 },
   brute: { name: '묵괴', r: 29, hp: 120, speed: 50, dmg: 16, mass: 4, dropChance: 1, dropAmount: 10 },
+  tiger: { name: '묵호', r: 40, hp: 1800, speed: 112, dmg: 14, mass: 14, dropChance: 1, dropAmount: 24 },
 };
 
 let nextId = 1;
@@ -62,6 +64,8 @@ export function makeEnemy(kind: EnemyKind, el: InkId, x: number, y: number, hpMu
     tx: 0,
     ty: 0,
     charge: 0,
+    loot: 0,
+    boss: kind === 'tiger' ? makeBossState() : null,
   };
 }
 
@@ -84,6 +88,9 @@ export function thinkEnemy(g: Game, e: Enemy, dt: number): void {
   e.aiT -= dt;
 
   switch (e.kind) {
+    case 'tiger':
+      // 묵호는 boss.ts가 움직인다
+      break;
     case 'drop':
     case 'brute': {
       // 살짝 흔들리며 다가온다

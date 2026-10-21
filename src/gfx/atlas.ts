@@ -41,6 +41,16 @@ export class Atlas {
   }
 
   build(): void {
+    for (const _ of this.buildSteps()) {
+      // 한꺼번에 굽는다
+    }
+  }
+
+  /**
+   * 한 장씩 굽는다 — 큰 그림을 여러 프레임에 나눠 구울 때 쓴다.
+   * 흰 실루엣은 같은 그림을 먼저 구워 둔 자리에서 베껴 다시 그리지 않는다.
+   */
+  *buildSteps(): Generator<void> {
     const items = this.entries.map((e) => ({ e, pw: Math.ceil(e.w * BAKE) + PAD * 2, ph: Math.ceil(e.h * BAKE) + PAD * 2 }));
     items.sort((a, b) => b.ph - a.ph);
 
@@ -50,6 +60,7 @@ export class Atlas {
     let y = 0;
     let rowH = 0;
     const placed: { e: Entry; page: number; x: number; y: number; pw: number; ph: number }[] = [];
+    const drawn = new Map<Entry['draw'], { page: number; x: number; y: number }>();
     const newPage = (): void => {
       page = document.createElement('canvas');
       page.width = PAGE;
@@ -70,15 +81,21 @@ export class Atlas {
       }
       if (y + it.ph > PAGE) newPage();
       const c = ctx as unknown as Ctx;
-      c.save();
-      c.beginPath();
-      c.rect(x, y, it.pw, it.ph);
-      c.clip();
-      c.translate(x + PAD, y + PAD);
-      c.scale(BAKE, BAKE);
-      c.translate(it.e.ox, it.e.oy);
-      it.e.draw(c);
-      c.restore();
+      const src = it.e.white ? drawn.get(it.e.draw) : undefined;
+      if (src) {
+        c.drawImage(this.pages[src.page], src.x, src.y, it.pw, it.ph, x, y, it.pw, it.ph);
+      } else {
+        c.save();
+        c.beginPath();
+        c.rect(x, y, it.pw, it.ph);
+        c.clip();
+        c.translate(x + PAD, y + PAD);
+        c.scale(BAKE, BAKE);
+        c.translate(it.e.ox, it.e.oy);
+        it.e.draw(c);
+        c.restore();
+        if (!it.e.white) drawn.set(it.e.draw, { page: this.pages.length - 1, x, y });
+      }
       if (it.e.white) {
         c.save();
         c.globalCompositeOperation = 'source-atop';
@@ -89,6 +106,7 @@ export class Atlas {
       placed.push({ e: it.e, page: this.pages.length - 1, x, y, pw: it.pw, ph: it.ph });
       x += it.pw;
       rowH = Math.max(rowH, it.ph);
+      yield;
     }
 
     const sources = this.pages.map((p) => new CanvasSource({ resource: p, scaleMode: 'linear' }));

@@ -5,6 +5,9 @@
 import { type Application, Container, RenderTexture, Sprite, Texture } from 'pixi.js';
 import { clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
+import type { Enemy } from '../game/types';
+import { TIGER_BODY } from '../game/boss';
+import { TIGER_FRAMES, type TigerPoseName } from '../render/tiger';
 import { WORLD_H, WORLD_W } from '../game/types';
 import { INKS, inkColor } from '../ink';
 import { DAMMUK, INK, PAPER_LIGHT, mix } from '../render/color';
@@ -12,10 +15,10 @@ import { CHAPTER, ROOM_KINDS, type RoomDef, WALL_TOP } from '../game/rooms';
 import { paintSeal } from '../render/paper';
 import { createRoomCanvas, paintObstacle } from '../render/room';
 import { ENEMY_FRAMES, WALK_FRAMES } from '../render/sprites';
-import { BAKE, type Atlas } from './atlas';
-import { BLOB_R, BLOB_VARIANTS, ENEMY_ART, WASH_R, WASH_VARIANTS, buildAtlas, enemyFrame, enemyWhite } from './assets';
+import { BAKE, type Atlas, type Frame } from './atlas';
+import { BLOB_R, BLOB_VARIANTS, ENEMY_ART, WASH_R, WASH_VARIANTS, buildAtlas, enemyFrame, enemyWhite, tigerAtlas, tigerFrame } from './assets';
 import { Compositor } from './composite';
-import { drawDashTrail, drawGate, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTrace, drawZone } from './fx';
+import { drawDashTrail, drawGate, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTigerTells, drawTrace, drawZone } from './fx';
 import { Hud } from './hud';
 import { InkSim } from './inksim';
 import { bakePaperFx } from './paperfx';
@@ -30,6 +33,8 @@ interface EnemySprites {
   body: Sprite;
   flash: Sprite;
   seen: boolean;
+  /** 걸음 위상(바퀴) — 묵호는 움직인 만큼 발을 옮긴다 */
+  walk: number;
 }
 
 /** 스프라이트를 프레임마다 필요한 만큼만 꺼내 쓰는 묶음 */
@@ -58,6 +63,9 @@ class SpritePool {
 
 export class View {
   readonly atlas: Atlas;
+  /** 묵호는 크고 붓질이 많아 따로, 조금씩 굽는다 */
+  private readonly tigerArt: Atlas;
+  private tigerBake: Generator<void> | null;
   readonly text = new TextCache();
   private readonly inkScene = new Container();
   private readonly world = new Container();
@@ -111,6 +119,8 @@ export class View {
 
   constructor(private readonly app: Application) {
     this.atlas = buildAtlas();
+    this.tigerArt = tigerAtlas();
+    this.tigerBake = this.tigerArt.buildSteps();
     this.paperCanvas = document.createElement('canvas');
     this.paperTex = Texture.WHITE;
     const { width, height } = app.screen;
@@ -152,8 +162,28 @@ export class View {
     this.resize();
   }
 
+  /** 묵호 그림이 필요한데 아직 다 굽지 못했으면 남은 것을 마저 굽는다 */
+  private bakeTiger(budgetMs: number): void {
+    if (!this.tigerBake) return;
+    const t0 = performance.now();
+    while (performance.now() - t0 < budgetMs) {
+      if (this.tigerBake.next().done) {
+        this.tigerBake = null;
+        return;
+      }
+    }
+  }
+
+  private art(name: string): Frame {
+    if (name.startsWith('tiger/')) {
+      this.bakeTiger(Infinity);
+      return this.tigerArt.get(name);
+    }
+    return this.atlas.get(name);
+  }
+
   private frameSprite(name: string): Sprite {
-    const f = this.atlas.get(name);
+    const f = this.art(name);
     const s = new Sprite(f.texture);
     s.anchor.set(f.ax, f.ay);
     s.scale.set(1 / BAKE);
@@ -161,7 +191,7 @@ export class View {
   }
 
   private setFrame(s: Sprite, name: string): void {
-    const f = this.atlas.get(name);
+    const f = this.art(name);
     if (s.texture !== f.texture) {
       s.texture = f.texture;
       s.anchor.set(f.ax, f.ay);
@@ -186,6 +216,8 @@ export class View {
   render(g: Game, dt: number): void {
     const { width, height } = this.app.screen;
     this.clock += dt;
+    // 시작 화면이나 고르는 동안 묵호를 조금씩 구워 둔다
+    if (this.tigerBake && g.phase !== 'play') this.bakeTiger(6);
     this.syncRoom(g);
     this.updateCamera(g, dt, width, height);
 
@@ -351,10 +383,17 @@ export class View {
       fx = WORLD_W / 2 + Math.sin(g.time * 0.05) * 260;
       fy = WORLD_H / 2 + Math.sin(g.time * 0.037 + 1) * 160;
     }
+    // 대숲의 주인이 나타날 때는 담장 위의 범을 올려다본다
+    const boss = g.enemies.find((e) => e.boss);
+    const intro = !this.focus && g.phase === 'play' && !!boss?.boss && (boss.boss.roared < 1 || (boss.boss.move === 'roar' && boss.boss.roared === 1 && boss.boss.t < 1.3));
+    if (intro && boss) {
+      fx = lerp(pl.x, boss.x, 0.85);
+      fy = boss.y - boss.boss!.z - 60;
+    }
     let tx = fx - vw / 2;
     let ty = fy - vh / 2;
     // 문을 고를 때는 그림 위쪽 표구까지 올라가 담장이 화면 표시 아래로 내려오게 한다
-    const topRoom = !this.focus && (g.roomPhase === 'open' || g.transition) ? -120 : 0;
+    const topRoom = !this.focus && (g.roomPhase === 'open' || g.transition || intro) ? -120 : 0;
     tx = vw >= WORLD_W ? (WORLD_W - vw) / 2 : clamp(tx, 0, WORLD_W - vw);
     ty = vh >= WORLD_H ? (WORLD_H - vh) / 2 : clamp(ty, topRoom, WORLD_H - vh);
     if (!this.camInit || (g.phase !== 'play' && g.phase !== 'title')) {
@@ -417,6 +456,21 @@ export class View {
       s.rotation = 0;
       s.tint = toHex(inkColor(g.ink.dominant));
       s.alpha = 0.14 + 0.1 * g.ink.potency;
+    }
+
+    // 묵호가 두른 먹의 기운과 다음 수
+    for (const e of g.enemies) {
+      if (!e.boss || e.dead) continue;
+      const b = e.boss;
+      const s = this.groundPool.next();
+      this.setFrame(s, `wash/${e.seed % WASH_VARIANTS}`);
+      const k = ((e.r * 2.3) / WASH_R / BAKE) * (1 + 0.06 * Math.sin(t * 2.4)) / (1 + b.z / 120);
+      s.scale.set(k * 1.5, k * 0.6);
+      s.position.set(e.x, e.y + 2);
+      s.rotation = 0;
+      s.tint = toHex(inkColor(e.el));
+      s.alpha = (b.move === 'die' ? 0.2 : 0.38) * (b.move === 'perch' ? 0 : 1);
+      drawTigerTells(this.groundStrokes, e, t);
     }
 
     // 먹귀 그림자
@@ -495,15 +549,20 @@ export class View {
         const root = new Container();
         const shadow = this.frameSprite('shadow');
         shadow.tint = toHex(DAMMUK);
-        const body = this.frameSprite(enemyFrame(e.kind, e.el, 0));
-        const flash = this.frameSprite(enemyWhite(e.kind, 0));
+        const tiger = e.kind === 'tiger';
+        const body = this.frameSprite(tiger ? tigerFrame('walk') : enemyFrame(e.kind as keyof typeof ENEMY_ART, e.el, 0));
+        const flash = this.frameSprite(tiger ? tigerFrame('walk', 0, true) : enemyWhite(e.kind as keyof typeof ENEMY_ART, 0));
         if (e.kind !== 'swallow') root.addChild(shadow);
         root.addChild(body, flash);
         this.entities.addChild(root);
-        sp = { root, shadow, body, flash, seen: true };
+        sp = { root, shadow, body, flash, seen: true, walk: 0 };
         this.enemySprites.set(e.id, sp);
       }
       sp.seen = true;
+      if (e.kind === 'tiger') {
+        this.drawTiger(e, sp, dt);
+        continue;
+      }
       const art = ENEMY_ART[e.kind];
       const held = e.stunT > 0 || e.rootT > 0;
       const animSpeed = held ? 0.25 : e.slowT > 0 || e.inPool ? 0.5 : 1;
@@ -571,6 +630,80 @@ export class View {
       d.root.destroy({ children: true });
       return false;
     });
+  }
+
+  /** 묵호 — 동작에 맞는 자세를 고르고, 뛰면 그림자만 땅에 남긴다 */
+  private drawTiger(e: Enemy, sp: EnemySprites, dt: number): void {
+    const b = e.boss!;
+    const sp2 = Math.hypot(e.vx, e.vy);
+    sp.walk += (sp2 * dt) / 70;
+    let pose: TigerPoseName = 'walk';
+    let frame = 0;
+    switch (b.move) {
+      case 'perch':
+      case 'crouch':
+      case 'aim':
+      case 'stagger':
+        pose = 'crouch';
+        break;
+      case 'descend':
+      case 'leap':
+        pose = 'leap';
+        break;
+      case 'roar':
+        if (b.t < 0.22) pose = 'crouch';
+        else if (b.t < 1.35) pose = Math.floor(b.t * 9) % 2 ? 'roar1' : 'roar0';
+        break;
+      case 'swipe':
+        pose = b.t < b.wind ? 'swipe0' : b.t < b.wind + 0.13 ? 'swipe1' : 'swipe2';
+        break;
+      case 'dash':
+        frame = Math.floor(b.t * 26) % TIGER_FRAMES.walk;
+        break;
+      case 'die':
+        pose = 'roar1';
+        break;
+      default:
+        frame = sp2 > 8 ? Math.floor(sp.walk * TIGER_FRAMES.walk) % TIGER_FRAMES.walk : 0;
+    }
+    this.setFrame(sp.body, tigerFrame(pose, frame));
+    this.setFrame(sp.flash, tigerFrame(pose, frame, true));
+    sp.root.position.set(e.x, e.y);
+    sp.root.zIndex = e.y;
+
+    const flip = Math.cos(e.face) >= 0 ? 1 : -1;
+    let rot = 0;
+    let sx = 1;
+    let sy = 1;
+    let lift = b.z;
+    if (b.move === 'crouch' || b.move === 'aim') rot = Math.sin(b.t * 32) * 0.012 * flip;
+    if (b.move === 'stagger') rot = Math.sin(b.t * 15) * 0.06 * (1 - b.t / b.dur);
+    if (b.move === 'rest' || (b.move === 'stalk' && sp2 < 8)) sy = 1 + Math.sin(b.t * 7) * 0.015;
+    if (e.hitT > 0) {
+      const k = e.hitT / 0.14;
+      sx *= 1 + 0.05 * k;
+      sy *= 1 - 0.04 * k;
+    }
+    let alpha = 1;
+    if (b.move === 'die') {
+      const k = b.t / b.dur;
+      sy *= 1 - 0.25 * k;
+      sx *= 1 + 0.1 * k;
+      lift -= 6 * k;
+      alpha = 1 - Math.max(0, (k - 0.55) / 0.45);
+    }
+    for (const s of [sp.body, sp.flash]) {
+      s.position.set(0, -lift);
+      s.rotation = rot;
+      s.scale.set((sx * flip) / BAKE, sy / BAKE);
+    }
+    sp.body.alpha = alpha;
+    sp.flash.alpha = e.hitT > 0 ? (e.hitT / 0.14) * 0.55 : b.move === 'die' ? Math.max(0, 0.6 - b.t) : 0;
+    // 하늘 높이 뜨면 그림자가 작고 옅어진다
+    const k = 1 / (1 + b.z / 90);
+    const shw = (TIGER_BODY.rx * 1.25) / 31 / BAKE;
+    sp.shadow.scale.set(shw * k, (shw * 0.85) * k);
+    sp.shadow.alpha = 0.3 * k * alpha;
   }
 
   private drawFx(g: Game): void {
