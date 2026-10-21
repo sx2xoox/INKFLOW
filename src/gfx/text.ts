@@ -35,6 +35,9 @@ export class TextCache {
     const hit = this.cache.get(key);
     if (hit) return hit;
     if (this.cache.size > 700) this.clear();
+    // 이 글자의 글꼴 조각이 아직 없으면 받아 오게 한다. 도착하면 main이 캐시를 비워 다시 굽는다
+    const probe = `${s.weight ?? 900} ${s.size}px ${s.font ?? SERIF}`;
+    if (!document.fonts.check(probe, text)) void document.fonts.load(probe, text);
     const tex = Texture.from(renderText(text, s), true);
     this.cache.set(key, tex);
     return tex;
