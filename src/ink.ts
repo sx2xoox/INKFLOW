@@ -192,9 +192,9 @@ const sum = (a: InkValues, b: InkValues): InkValues => {
   return out;
 };
 
-/** 젖은 먹이 마르는 빠르기 — 많을수록 빨리 마른다. 싸움 한 판이면 절반쯤 */
-const DRY_RATE = 0.017;
-const DRY_BASE = 0.04;
+/** 젖은 먹이 마르는 빠르기 — 많을수록 빨리 마른다. 방 하나를 싸우면 3분의 1쯤 */
+const DRY_RATE = 0.0115;
+const DRY_BASE = 0.03;
 
 /**
  * 먹의 기운은 두 겹이다.

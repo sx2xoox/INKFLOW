@@ -437,11 +437,15 @@ export class Hud {
     if (!list.length) return;
     const m = 26;
     const size = 26;
-    const y = this.h - m - size / 2;
-    this.label('지닌 물건', m, y - size + 2, { size: 12, color: DAMMUK, halo: 2, weight: 700 }, 0, 0.5);
+    // 벼루와 겹치지 않을 만큼만 한 줄에 놓고, 넘치면 위로 쌓는다
+    const perRow = Math.max(3, Math.min(8, Math.floor((this.w / 2 - 190 - m) / (size + 6))));
+    const rows = Math.ceil(list.length / perRow);
+    const yOf = (r: number): number => this.h - m - size / 2 - (rows - 1 - r) * (size + 6);
+    this.label('지닌 물건', m, yOf(0) - size + 2, { size: 12, color: DAMMUK, halo: 2, weight: 700 }, 0, 0.5);
     list.forEach((id, i) => {
       const a = ARTIFACTS[id];
-      const x = m + size / 2 + i * (size + 6);
+      const y = yOf(Math.floor(i / perRow));
+      const x = m + size / 2 + (i % perRow) * (size + 6);
       const col = a.ink === 'baek' ? ([150, 146, 138] as RGB) : INKS[a.ink].color;
       this.strokes.stroke([{ x: x - size / 2 + 2, y }, { x: x + size / 2 - 2, y: y - 0.5 }], { width: size - 2, color: col, alpha: 0.9, dryness: 0.2, taperIn: 0, taperOut: 0, seed: 400 + i, wet: 0.2 });
       this.label(a.glyph, x, y + 0.5, { size: 15, color: a.ink === 'baek' || a.ink === 'hwang' ? INK : PAPER_LIGHT, weight: 900 });
