@@ -3,9 +3,13 @@
 다섯 빛깔 먹(오방색)의 기운을 다루는 탑다운 액션 로그라이트.
 가장 강한 먹의 기운이 캐릭터의 3타 콤보를 통째로 바꾼다. 모든 그림은 코드로 그린 수묵화다.
 
+- 바로 하기: https://sx2xoox.github.io/INKFLOW/
 - 기획서: [docs/GDD.md](docs/GDD.md)
 
 ## 실행
+
+기본 브랜치에 올리면 GitHub Actions가 빌드해서 GitHub Pages로 내보낸다(`.github/workflows/deploy.yml`).
+로컬에서 돌릴 때는:
 
 ```bash
 npm install
