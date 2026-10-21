@@ -132,15 +132,23 @@ export function startingItems(): Item[] {
   return INK_ORDER.map((id) => raiseItem(id, START_RAISE));
 }
 
+export interface RewardOptions {
+  /** 이 먹을 올리는 카드를 꼭 넣는다 — 방을 채웠던 먹귀의 먹 */
+  guarantee?: InkId | null;
+  /** 유물 한 장을 꼭 넣는다 (정예 방) */
+  relic?: boolean;
+}
+
 /** 세 장: 진묵 하나, 정화나 전환 하나, 나머지는 아무거나 */
-export function rollRewards(values: InkValues, dominant: InkId | null): Item[] {
+export function rollRewards(values: InkValues, dominant: InkId | null, o: RewardOptions = {}): Item[] {
   const out: Item[] = [];
   const add = (it: Item | undefined): void => {
-    if (it && !out.some((o) => o.id === it.id)) out.push(it);
+    if (it && !out.some((x) => x.id === it.id)) out.push(it);
   };
   const owned = INK_ORDER.filter((id) => values[id] > 0);
 
-  add(raiseItem(pick(INK_ORDER)));
+  add(raiseItem(o.guarantee ?? pick(INK_ORDER)));
+  if (o.relic) add(pick(RELICS));
 
   const manip: Item[] = [];
   for (const from of owned) {
@@ -156,9 +164,31 @@ export function rollRewards(values: InkValues, dominant: InkId | null): Item[] {
   add(manip.length ? pick(manip) : raiseItem(pick(INK_ORDER)));
 
   const pool: Item[] = [...RELICS, ...INK_ORDER.map((id) => raiseItem(id)), ...manip];
+  const want = o.relic ? 4 : 3;
   for (const it of shuffle(pool)) {
-    if (out.length >= 3) break;
+    if (out.length >= want) break;
     add(it);
   }
   return shuffle(out);
+}
+
+/** 샘: 기력을 되찾고 먹을 씻어 낸다 */
+export function springItems(values: InkValues, dominant: InkId | null): Item[] {
+  const out: Item[] = [
+    {
+      id: 'spring-drink',
+      kind: 'relic',
+      name: '샘물 한 모금',
+      glyph: '泉',
+      desc: '기력 45 회복',
+      inks: [],
+      apply: (g) => g.healPlayer(45),
+    },
+    { ...washAll, desc: '모든 먹의 기운 −15, 기력 15 회복', apply: (g) => g.healPlayer(15) },
+  ];
+  const owned = INK_ORDER.filter((id) => values[id] > 0).sort((a, b) => values[b] - values[a]);
+  if (dominant) out.push(shiftItem(dominant, GENERATES[dominant]));
+  else if (owned[0]) out.push(purifyItem(owned[0]));
+  if (owned[1]) out.push(purifyItem(owned[1]));
+  return out;
 }

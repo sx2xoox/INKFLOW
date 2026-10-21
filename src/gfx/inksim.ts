@@ -214,6 +214,19 @@ export class InkSim {
     }
   }
 
+  /** 새 방 — 먹 자국과 물기를 모두 걷어 낸다 */
+  clear(): void {
+    const empty = new Container();
+    for (const t of [...this.P, ...this.W]) this.renderer.render({ container: empty, target: t, clear: true, clearColor: [0, 0, 0, 0] });
+    this.wetT = 0;
+    this.fadeNext = 1;
+  }
+
+  /** 지금 먹 자국 텍스처 */
+  get texture(): RenderTexture {
+    return this.P[this.cur];
+  }
+
   /** 물결이 끝나면 먹 자국이 조금 바랜다 */
   fade(amount: number): void {
     this.fadeNext = 1 - amount;

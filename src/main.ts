@@ -6,11 +6,12 @@ import '@fontsource/noto-serif-kr/900.css';
 import '@fontsource/nanum-brush-script/400.css';
 import { Application } from 'pixi.js';
 import { Sound } from './audio';
-import { TAU } from './core/math';
 import { Game, type InputFrame } from './game/game';
+import { WORLD_H, WORLD_W } from './game/types';
 import { View } from './gfx/view';
 import { INK_ORDER, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
+import { CHAPTER, ROOM_KINDS } from './game/rooms';
 import { Input } from './input';
 import { UI } from './ui';
 import { setupGallery } from './gallery';
@@ -32,6 +33,10 @@ function canvasGlyphs(): string {
     '첫째둘째셋째넷째다섯째여섯째일곱째여덟째아홉째열째번째 물결',
     '먹귀가 몰려온다 물결을 넘기다 먹이 마르기 전에 다음 먹을 고르라',
     '먹귀의 기운 유리한 먹 남은 먹귀 붓잡이 0123456789+-!·「」—',
+    '방 문이 열리다 문에 적힌 먹과 방을 보고 길을 고른다 문을 골라 지나간다 남은 무리',
+    '한 폭을 그려 내다 낙관을 찍는다 샘에 다가가 먹을 씻는다 화첩을 덮는다 다 그리다 마지막 문을 지나',
+    `${CHAPTER.name}${CHAPTER.hanja}一二三四五六終`,
+    ...Object.values(ROOM_KINDS).flatMap((k) => [k.name, k.hanja, k.desc]),
   ];
   for (const c of CHARACTERS) {
     words.push(c.name);
@@ -82,6 +87,13 @@ async function boot(): Promise<void> {
   const ui = new UI(game, document.body);
   const sound = new Sound();
   ui.onSelect = () => sound.play({ type: 'ui' });
+  ui.album = () => view.album;
+  // 판이 끝나는 순간, 마지막 방을 화첩에 담은 뒤에 화면을 띄운다
+  const showPhase = game.onPhase;
+  game.onPhase = (p) => {
+    if (p === 'won' || p === 'over') view.flushCapture(game);
+    showPhase?.(p);
+  };
   const unlock = (): void => sound.unlock();
   window.addEventListener('pointerdown', unlock);
   window.addEventListener('keydown', (e) => {
@@ -159,7 +171,7 @@ async function boot(): Promise<void> {
   Object.assign(window, { __game: game, __view: view, __step: step, __ready: true });
 }
 
-/** 시연용 붓잡이: 가까운 먹귀를 겨누며 원을 그리듯 움직인다 */
+/** 시연용 붓잡이: 가까운 먹귀를 겨누며 원을 그리듯 움직이고, 샘과 문으로 걸어간다 */
 function demoInput(g: Game, t: number): InputFrame {
   const pl = g.player;
   let target = { x: pl.x + Math.cos(t) * 100, y: pl.y + Math.sin(t) * 100 };
@@ -172,15 +184,20 @@ function demoInput(g: Game, t: number): InputFrame {
     }
   }
   const a = t * 0.6;
-  const cx = 1200 + Math.cos(a) * 260;
-  const cy = 800 + Math.sin(a * 1.3) * 180;
-  let mx = (cx - pl.x) / 200;
-  let my = (cy - pl.y) / 200;
+  let cx = WORLD_W / 2 + Math.cos(a) * 260;
+  let cy = WORLD_H / 2 + 60 + Math.sin(a * 1.3) * 150;
+  const goal = g.roomPhase === 'open' && g.gates.length ? g.gates[Math.floor(t / 1000) % g.gates.length] : g.roomPhase === 'spring' ? g.layout.pond : null;
+  if (goal) {
+    cx = goal.x;
+    cy = goal.y;
+  }
+  let mx = (cx - pl.x) / 120;
+  let my = (cy - pl.y) / 120;
   if (best < 70) {
     mx -= (target.x - pl.x) / best;
     my -= (target.y - pl.y) / best;
   }
-  return { moveX: mx, moveY: my, aimX: target.x, aimY: target.y, attack: best < 200, dash: best < 40 && Math.sin(t * 3) > 0.9 && TAU > 0 };
+  return { moveX: mx, moveY: my, aimX: target.x, aimY: target.y, attack: best < 200, dash: best < 40 && Math.sin(t * 3) > 0.9 };
 }
 
 boot();

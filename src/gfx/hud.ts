@@ -1,10 +1,12 @@
 /**
  * 화면 위 표시. 이것도 먹 레이어에 그려져 한지 위에 스민다.
  */
-import { type Container, Sprite } from 'pixi.js';
+import { Container, Sprite, Texture } from 'pixi.js';
 import { TAU, clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
-import { INKS, INK_MAX, INK_ORDER, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
+import { INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
+import { numeral } from '../game/game';
+import { CHAPTER, ROOM_KINDS } from '../game/rooms';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, PAPER_LIGHT, SEAL, mix } from '../render/color';
 import { BAKE, type Atlas } from './atlas';
@@ -17,6 +19,13 @@ const NUM = ['一', '二', '三'];
 
 export class Hud {
   private readonly strokes = new StrokeBatch(12000);
+  /** 글자와 그림 — 붓질 위에 */
+  private readonly labels = new Container();
+  /** 문을 지날 때 화면을 덮는 먹 — 맨 위 */
+  private readonly wipe = new Container();
+  private readonly wipeFill = new Sprite(Texture.WHITE);
+  private readonly wipeStrokes = new StrokeBatch(2000);
+  private readonly wipeGlyph = new Sprite();
   private readonly sprites: Sprite[] = [];
   private used = 0;
   private shownHp = 100;
@@ -27,11 +36,14 @@ export class Hud {
   res = 2;
 
   constructor(
-    private readonly layer: Container,
+    layer: Container,
     private readonly atlas: Atlas,
     private readonly text: TextCache,
   ) {
-    layer.addChild(this.strokes.mesh);
+    layer.addChild(this.strokes.mesh, this.labels, this.wipe);
+    this.wipeFill.tint = 0x1a1715;
+    this.wipeGlyph.anchor.set(0.5);
+    this.wipe.addChild(this.wipeFill, this.wipeStrokes.mesh, this.wipeGlyph);
   }
 
   resize(w: number, h: number): void {
@@ -44,7 +56,7 @@ export class Hud {
     if (!s) {
       s = new Sprite();
       this.sprites.push(s);
-      this.layer.addChild(s);
+      this.labels.addChild(s);
     }
     s.visible = true;
     s.rotation = 0;
@@ -97,6 +109,7 @@ export class Hud {
     }
     this.banner(g);
     this.switchFx(g);
+    this.transition(g);
     this.strokes.end();
     for (let i = this.used; i < this.sprites.length; i++) this.sprites[i].visible = false;
   }
@@ -169,43 +182,122 @@ export class Hud {
     }
   }
 
-  /* 물결과 먹귀의 기운 */
+  /* 방과 먹귀의 기운 */
   private waveInfo(g: Game): void {
     const w = this.w;
     const m = 26;
     const wave = g.wave;
-    if (!wave) return;
-    this.label(`${['', '첫째', '둘째', '셋째', '넷째', '다섯째', '여섯째', '일곱째', '여덟째', '아홉째', '열째'][wave.n] ?? `${wave.n}번째`} 물결`, w / 2, m + 12, {
-      size: 30,
-      color: INK,
-      font: BRUSH_FONT,
-      weight: 400,
-      halo: 2,
-    });
-    const y = m + 40;
-    if (wave.spawning) {
-      const frac = clamp(1 - wave.t / wave.duration, 0, 1);
-      const L = 180;
-      this.strokes.stroke([{ x: w / 2 - L / 2, y }, { x: w / 2 + L / 2, y }], { width: 5, color: DAMMUK, alpha: 0.15, dryness: 0.6, taperIn: 0.05, taperOut: 0.05, seed: 40 });
-      if (frac > 0.01) {
-        this.strokes.stroke([{ x: w / 2 - L / 2, y }, { x: w / 2 - L / 2 + L * frac, y }], { width: 5, color: INK, alpha: 0.7, dryness: 0.5, taperIn: 0.05, taperOut: 0.2, seed: 41 });
+    let themes: InkId[] = [];
+    if (g.mode === 'explore') {
+      const room = g.room;
+      this.label(`${CHAPTER.name} · ${numeral(room.depth + 1)} 방`, w / 2, m + 12, { size: 30, color: INK, font: BRUSH_FONT, weight: 400, halo: 2 });
+      // 장의 방들 — 다 그린 방은 그 먹 색으로 채운다
+      const gap = 30;
+      const x0 = w / 2 - ((CHAPTER.rooms - 1) * gap) / 2;
+      const ny = m + 44;
+      for (let i = 0; i < CHAPTER.rooms; i++) {
+        const x = x0 + i * gap;
+        const done = g.cleared[i];
+        if (i > 0) this.strokes.stroke([{ x: x - gap + 9, y: ny }, { x: x - 9, y: ny }], { width: 1.6, color: DAMMUK, alpha: 0.4, dryness: 0.5, taperIn: 0.1, taperOut: 0.1, seed: 80 + i });
+        if (done) this.frame(`blob/${i % 6}`, x, ny, 8 / BLOB_R, done.el ? INKS[done.el].color : DAMMUK, 0.95);
+        const current = i === room.depth && !done;
+        this.strokes.stroke(arcPoints(x, ny, 7.5, -2 + i, TAU * 0.92, 18), {
+          width: current ? 2.8 : 1.6,
+          color: current ? INK : DAMMUK,
+          alpha: current ? 0.95 : done ? 0.6 : 0.4,
+          dryness: 0.4,
+          taperIn: 0.1,
+          taperOut: 0.3,
+          seed: 90 + i,
+        });
       }
+      const sy = m + 66;
+      if (g.roomPhase === 'fight' && room.kind !== 'hold') {
+        const left = g.beatsLeft;
+        this.label(left > 0 ? `먹귀 ${g.enemies.length} · 남은 무리 ${left}` : `남은 먹귀 ${g.enemies.length}`, w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
+      } else if (g.roomPhase === 'spring') {
+        this.label('샘에 다가가 먹을 씻는다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
+      } else if (g.roomPhase === 'open') {
+        this.label('문을 골라 지나간다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
+      }
+      if (room.kind === 'hold' && wave && g.roomPhase === 'fight') this.timerBar(wave, sy);
+      if (g.roomPhase === 'fight') themes = wave ? wave.themes : room.el ? [room.el] : [];
     } else {
-      this.label(`남은 먹귀 ${g.enemies.length}`, w / 2, y, { size: 14, color: INK, halo: 2, weight: 700 });
+      if (!wave) return;
+      this.label(`${numeral(wave.n)} 물결`, w / 2, m + 12, { size: 30, color: INK, font: BRUSH_FONT, weight: 400, halo: 2 });
+      const y = m + 40;
+      if (wave.spawning) this.timerBar(wave, y);
+      else this.label(`남은 먹귀 ${g.enemies.length}`, w / 2, y, { size: 14, color: INK, halo: 2, weight: 700 });
+      themes = wave.themes;
     }
+    if (!themes.length) return;
 
-    // 오른쪽 위: 이번 물결의 기운과 상극
+    // 오른쪽 위: 먹귀의 기운과 상극
     const rx = w - m;
     this.label('먹귀의 기운', rx, m + 8, { size: 13, color: DAMMUK, halo: 2, weight: 700 }, 1, 0.5);
-    wave.themes.forEach((el, i) => {
+    themes.forEach((el, i) => {
       const x = rx - 14 - i * 36;
       const yy = m + 36;
       this.frame(`blob/${(i + 2) % 6}`, x, yy, 13 / BLOB_R, INKS[el].color, 0.95);
       this.label(INKS[el].hanja, x, yy, { size: 15, color: el === 'baek' ? INK : PAPER_LIGHT, weight: 900 });
     });
-    const counters = wave.themes.map((el) => INK_ORDER.find((id) => OVERCOMES[id] === el)!);
+    const counters = themes.map((el) => INK_ORDER.find((id) => OVERCOMES[id] === el)!);
     const hint = counters.map((c) => INKS[c].hanja).join(' ');
     this.label(`유리한 먹  ${hint}`, rx, m + 64, { size: 13, color: INK, halo: 2, weight: 700 }, 1, 0.5, 0.8);
+  }
+
+  private timerBar(wave: NonNullable<Game['wave']>, y: number): void {
+    const w = this.w;
+    const frac = clamp(1 - wave.t / wave.duration, 0, 1);
+    const L = 180;
+    this.strokes.stroke([{ x: w / 2 - L / 2, y }, { x: w / 2 + L / 2, y }], { width: 5, color: DAMMUK, alpha: 0.15, dryness: 0.6, taperIn: 0.05, taperOut: 0.05, seed: 40 });
+    if (frac > 0.01) {
+      this.strokes.stroke([{ x: w / 2 - L / 2, y }, { x: w / 2 - L / 2 + L * frac, y }], { width: 5, color: INK, alpha: 0.7, dryness: 0.5, taperIn: 0.05, taperOut: 0.2, seed: 41 });
+    }
+  }
+
+  /** 문을 지날 때 — 큰 붓질로 화면을 덮었다가 걷는다 */
+  private transition(g: Game): void {
+    const tr = g.transition;
+    this.wipeStrokes.begin();
+    this.wipe.visible = !!tr;
+    if (!tr) {
+      this.wipeStrokes.end();
+      return;
+    }
+    const half = tr.dur * 0.5;
+    const cover = tr.t < half;
+    const a = cover ? 1 : clamp(1 - (tr.t - half) / half, 0, 1);
+    // 붓질이 지나간 뒤를 먹이 메운다
+    const fill = cover ? clamp((tr.t / half) * 1.7 - 0.7, 0, 1) : a;
+    this.wipeFill.width = this.w;
+    this.wipeFill.height = this.h;
+    this.wipeFill.alpha = Math.pow(fill, 1.5) * 0.97;
+    const n = 6;
+    const rowH = this.h / n;
+    for (let i = 0; i < n; i++) {
+      const p = cover ? clamp((tr.t / half) * 1.3 - i * 0.06, 0, 1) : 1;
+      if (p <= 0) continue;
+      const y = rowH * (i + 0.5) + (i % 2 ? 6 : -6);
+      const dir = i % 2 ? -1 : 1;
+      const x0 = dir > 0 ? -80 : this.w + 80;
+      const x1 = x0 + dir * (this.w + 160) * p;
+      const pts = [{ x: x0, y }, { x: (x0 + x1) / 2, y: y + (i % 2 ? -8 : 8) }, { x: x1, y }];
+      this.wipeStrokes.stroke(pts, { width: rowH * 1.9, color: INK, alpha: a, dryness: 0.3, taperIn: 0.02, taperOut: 0.22, seed: 500 + i, wet: 0.4, bristles: 9 });
+    }
+    const mid = 1 - Math.abs(tr.t - half) / half;
+    const room = tr.to;
+    const res = textRes(this.res * 1.4);
+    this.wipeGlyph.texture = this.text.get(room ? ROOM_KINDS[room.kind].hanja : '終', {
+      size: 140,
+      color: room?.el ? mix(INKS[room.el].color, PAPER_LIGHT, 0.35) : PAPER_LIGHT,
+      weight: 900,
+      res,
+    });
+    this.wipeGlyph.scale.set((1 + 0.06 * mid) / res);
+    this.wipeGlyph.position.set(this.w / 2, this.h / 2);
+    this.wipeGlyph.alpha = clamp(mid * 2.2 - 0.5, 0, 1) * a;
+    this.wipeStrokes.end();
   }
 
   /* 다섯 벼루 */

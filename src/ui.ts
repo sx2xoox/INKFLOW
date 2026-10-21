@@ -5,6 +5,7 @@
 import { TAU } from './core/math';
 import { mulberry32 } from './core/rng';
 import { type Game, numeral } from './game/game';
+import { CHAPTER, ROOM_KINDS, type RoomDef } from './game/rooms';
 import type { Item } from './game/items';
 import { INKS, INK_MAX, INK_ORDER, type InkId, inkHanja, inkName } from './ink';
 import { arcPoints, brushStroke, splatter, wash } from './render/brush';
@@ -24,6 +25,8 @@ export class UI {
   onPauseToggle: (() => void) | null = null;
   /** 카드를 고르거나 단추를 눌렀을 때 */
   onSelect: (() => void) | null = null;
+  /** 이번 판에 그려 낸 방들의 그림 */
+  album: () => { canvas: HTMLCanvasElement; room: RoomDef }[] = () => [];
 
   constructor(
     private readonly game: Game,
@@ -41,7 +44,7 @@ export class UI {
         const n = Number(e.key);
         if (n >= 1 && n <= this.cards.length) this.choose(this.cards[n - 1].item);
       }
-      if ((this.game.phase === 'title' || this.game.phase === 'over') && (e.code === 'Enter' || e.code === 'Space')) {
+      if ((this.game.phase === 'title' || this.game.phase === 'over' || this.game.phase === 'won') && (e.code === 'Enter' || e.code === 'Space')) {
         this.game.startRun();
       }
       if (e.code === 'Escape' || e.code === 'KeyP') this.onPauseToggle?.();
@@ -60,6 +63,7 @@ export class UI {
     if (phase === 'title') this.title();
     else if (phase === 'reward') this.reward();
     else if (phase === 'over') this.over();
+    else if (phase === 'won') this.won();
     else this.root.classList.add('hidden');
   }
 
@@ -87,8 +91,13 @@ export class UI {
     box.appendChild(logo);
     box.appendChild(el('p', 'tag', '다섯 빛깔 먹의 기운을 다루는 붓잡이의 싸움'));
     const b = el('button', 'btn big', '붓을 들다');
-    b.onclick = () => this.game.startRun();
+    b.onclick = () => this.game.startRun('explore');
     box.appendChild(b);
+    const sub = el('p', 'mode-desc', `${CHAPTER.name}의 방 ${CHAPTER.rooms}칸을 문을 골라 지나간다`);
+    box.appendChild(sub);
+    const e = el('button', 'btn ghost', '끝없는 물결');
+    e.onclick = () => this.game.startRun('endless');
+    box.appendChild(e);
     box.appendChild(controls());
     this.root.appendChild(box);
   }
@@ -101,7 +110,11 @@ export class UI {
 
     const themes = g.nextThemes.map((t) => `<b style="color:${textInk(t)}">${INKS[t].hanja}</b>`).join(' · ');
     const counters = g.counterHints().map((t) => `<b style="color:${textInk(t)}">${INKS[t].hanja} ${INKS[t].name}</b>`).join(', ');
-    box.appendChild(el('p', 'next', `${numeral(g.waveNo + 1)} 물결 — ${themes} 먹귀가 온다. 상극인 먹: ${counters}`));
+    let next = '';
+    if (g.mode === 'endless') next = `${numeral(g.waveNo + 1)} 물결 — ${themes} 먹귀가 온다. 상극인 먹: ${counters}`;
+    else if (g.cleared.length === 0) next = `첫 방 — ${themes} 먹귀가 기다린다. 상극인 먹: ${counters}`;
+    else next = '고르고 나면 담장에 다음 방으로 가는 문이 그려진다';
+    box.appendChild(el('p', 'next', next));
     box.appendChild(inkBars(g));
 
     const row = el('div', g.rewards.length > 3 ? 'cards five' : 'cards');
@@ -151,24 +164,60 @@ export class UI {
     this.game.chooseReward(item);
   }
 
+  private stats(): HTMLElement {
+    const g = this.game;
+    const m = Math.floor(g.runTime / 60);
+    const s = Math.floor(g.runTime % 60);
+    const first = g.mode === 'explore' ? `<div><span>그려 낸 방</span><b>${g.cleared.length} / ${CHAPTER.rooms}</b></div>` : `<div><span>넘긴 물결</span><b>${g.waveNo}</b></div>`;
+    return el(
+      'div',
+      'stats',
+      `${first}<div><span>쓰러뜨린 먹귀</span><b>${g.kills}</b></div><div><span>걸린 시간</span><b>${m}:${String(s).padStart(2, '0')}</b></div><div><span>마지막 먹</span><b>${inkHanja(g.ink.dominant)} ${inkName(g.ink.dominant)}</b></div>`,
+    );
+  }
+
   private over(): void {
     const g = this.game;
     this.root.classList.add('over-screen');
     const box = el('div', 'panel over');
     box.appendChild(el('h2', 'brush', '획이 끊어지다'));
-    const m = Math.floor(g.runTime / 60);
-    const s = Math.floor(g.runTime % 60);
-    box.appendChild(
-      el(
-        'div',
-        'stats',
-        `<div><span>넘긴 물결</span><b>${g.waveNo}</b></div><div><span>쓰러뜨린 먹귀</span><b>${g.kills}</b></div><div><span>버틴 시간</span><b>${m}:${String(s).padStart(2, '0')}</b></div><div><span>마지막 먹</span><b>${inkHanja(g.ink.dominant)} ${inkName(g.ink.dominant)}</b></div>`,
-      ),
-    );
+    box.appendChild(this.stats());
+    if (g.mode === 'explore' && this.album().length) box.appendChild(this.albumView());
     const b = el('button', 'btn big', '다시 먹을 갈다');
     b.onclick = () => g.startRun();
     box.appendChild(b);
     this.root.appendChild(box);
+  }
+
+  /** 장을 다 그렸다 — 그린 방들을 화첩으로 */
+  private won(): void {
+    const g = this.game;
+    this.root.classList.add('won-screen');
+    const box = el('div', 'panel won');
+    box.appendChild(el('h2', 'brush', `${CHAPTER.name}을 다 그리다`));
+    box.appendChild(el('p', 'tag', '싸우며 남긴 먹 자국이 그대로 그림이 되었다'));
+    box.appendChild(this.albumView());
+    box.appendChild(this.stats());
+    const b = el('button', 'btn big', '새 화첩을 펴다');
+    b.onclick = () => g.startRun();
+    box.appendChild(b);
+    this.root.appendChild(box);
+  }
+
+  private albumView(): HTMLElement {
+    const wrap = el('div', 'album');
+    this.album().forEach(({ canvas, room }) => {
+      const fig = el('figure', 'leaf');
+      const img = el('img') as HTMLImageElement;
+      img.src = canvas.toDataURL('image/jpeg', 0.9);
+      img.alt = `${numeral(room.depth + 1)} 방`;
+      fig.appendChild(img);
+      const kind = ROOM_KINDS[room.kind];
+      const elName = room.el ? `<b style="color:${textInk(room.el)}">${INKS[room.el].hanja}</b> ` : '';
+      fig.appendChild(el('figcaption', '', `${numeral(room.depth + 1)} 방 · ${elName}${kind.name}`));
+      wrap.appendChild(fig);
+    });
+    return wrap;
   }
 }
 

@@ -2,9 +2,11 @@ import type { Vec } from '../core/math';
 import type { InkId } from '../ink';
 import type { RGB } from '../render/color';
 import type { Move } from './moves';
+import type { RoomDef } from './rooms';
 
-export const WORLD_W = 2400;
-export const WORLD_H = 1600;
+/** 방 한 칸(그림 한 폭)의 크기 */
+export const WORLD_W = 1600;
+export const WORLD_H = 1000;
 /** 그림 테두리 안쪽으로만 움직일 수 있다 */
 export const WALL = 56;
 
@@ -250,4 +252,23 @@ export interface Banner {
   t: number;
   dur: number;
   color: RGB;
+}
+
+/** 담장에 그려지는 달문. room이 없으면 장을 마치는 문이다. */
+export interface Gate {
+  x: number;
+  y: number;
+  r: number;
+  room: RoomDef | null;
+  /** 0..1 — 붓으로 그려지는 정도 */
+  open: number;
+  seed: number;
+}
+
+/** 문을 지나 다음 방으로 넘어가는 동안 */
+export interface Transition {
+  t: number;
+  dur: number;
+  to: RoomDef | null;
+  swapped: boolean;
 }

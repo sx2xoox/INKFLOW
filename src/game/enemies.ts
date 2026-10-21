@@ -3,7 +3,7 @@ import { clamp, rand } from '../core/math';
 import { randomSeed } from '../core/rng';
 import type { InkId } from '../ink';
 import type { Game } from './game';
-import { type Enemy, type EnemyKind, WALL, WORLD_H, WORLD_W } from './types';
+import type { Enemy, EnemyKind } from './types';
 
 export interface EnemyKindDef {
   name: string;
@@ -171,19 +171,4 @@ export function thinkEnemy(g: Game, e: Enemy, dt: number): void {
       break;
     }
   }
-}
-
-/** 화면 밖 그림 가장자리 쪽에서 나타난다. */
-export function spawnPoint(px: number, py: number): { x: number; y: number } {
-  for (let i = 0; i < 12; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const r = rand(480, 680);
-    const x = px + Math.cos(a) * r;
-    const y = py + Math.sin(a) * r;
-    if (x > WALL + 30 && x < WORLD_W - WALL - 30 && y > WALL + 30 && y < WORLD_H - WALL - 30) return { x, y };
-  }
-  return {
-    x: clamp(px + rand(-600, 600), WALL + 30, WORLD_W - WALL - 30),
-    y: clamp(py + rand(-500, 500), WALL + 30, WORLD_H - WALL - 30),
-  };
 }

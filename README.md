@@ -3,6 +3,10 @@
 다섯 빛깔 먹(오방색)의 기운을 다루는 탑다운 액션 로그라이트.
 가장 강한 먹의 기운이 캐릭터의 3타 콤보를 통째로 바꾼다. 모든 그림은 코드로 그린 수묵화다.
 
+한 판은 병풍 한 틀, 방 하나는 그림 한 폭이다. 방을 다 그려 내면(먹귀를 모두 쓰러뜨리면) 낙관이 찍히고,
+담장에 그려지는 달문에서 다음 방의 먹과 종류를 보고 길을 고른다. 장을 마치면 그린 방들이 화첩으로 남는다.
+첫 화면에서 끝없는 물결(한 방에서 계속 버티기)도 고를 수 있다.
+
 - 바로 하기: https://sx2xoox.github.io/INKFLOW/
 - 기획서: [docs/GDD.md](docs/GDD.md)
 
@@ -38,13 +42,16 @@ npm run build    # dist/ 에 정적 파일
 | `?gallery=jeok` | 한 먹의 세 획과 상태 효과를 멈춘 채로 보기 (`cheong` `jeok` `hwang` `baek` `heuk` `plain`) |
 | `?gallery=enemies` | 모든 먹귀를 색별로 보기 |
 
+`?demo`와 `?gallery`는 시작 화면 없이 바로 들어간다.
+
 ## 구조
 
 ```
 src/
   ink.ts            오방색 먹, 상극·상생, 주속성 판정
   game/             게임 규칙 (렌더링과 무관)
-    game.ts         물결, 피해, 콤보 진행
+    game.ts         방 진행, 물결, 피해, 콤보 진행
+    rooms.ts        방 종류, 배치(바위·대숲·연못), 먹귀 무리, 다음 문
     characters.ts   캐릭터와 먹별 3타 콤보 정의
     moves.ts        동작 판정 모양
     enemies.ts      먹귀 정의와 행동
@@ -52,7 +59,8 @@ src/
   render/           캔버스 붓 도구 (그림을 굽는 데 쓴다)
     brush.ts        붓질, 먹 덩이, 먹 튐
     sprites.ts      붓잡이와 먹귀 그림
-    paper.ts        한지와 풍경
+    paper.ts        한지
+    room.ts         방 그림(담장·디딤돌·연못)과 바위·대숲
   gfx/              PixiJS 렌더링
     strokes.ts      GPU 붓질 셰이더
     composite.ts    한지 합성 셰이더

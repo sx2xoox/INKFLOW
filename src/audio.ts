@@ -16,6 +16,8 @@ export type SoundEvent =
   | { type: 'quake' }
   | { type: 'dash' }
   | { type: 'spit' }
+  | { type: 'seal' }
+  | { type: 'gate' }
   | { type: 'ui' };
 
 /** 궁(C) 상(D) 각(E) 치(G) 우(A) */
@@ -126,6 +128,19 @@ export class Sound {
       case 'spit':
         this.thump(t, 300, 0.15, 0.06);
         this.burst(t, 'bandpass', 900, 0.08, 0.15);
+        return;
+      case 'seal':
+        // 낙관을 꾹 누르는 소리
+        this.thump(t, 110, 0.55, 0.18);
+        this.burst(t, 'lowpass', 700, 0.12, 0.3);
+        this.tone(t + 0.05, NOTE.hwang, 1.4, 0.12, 'sine');
+        this.tone(t + 0.05, NOTE.hwang * 1.5, 1.2, 0.06, 'sine');
+        return;
+      case 'gate':
+        // 붓으로 문을 그리는 소리와 맑은 울림
+        this.sweep(t, 400, 1600, 0.5, 0.25, 'bandpass');
+        this.tone(t + 0.15, NOTE.heuk * 2, 1.6, 0.08, 'sine');
+        this.tone(t + 0.3, NOTE.cheong * 2, 1.6, 0.06, 'sine');
         return;
       case 'ui':
         // 목탁

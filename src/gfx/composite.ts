@@ -88,9 +88,13 @@ void main() {
   vec3 paper = texture(uPaper, clamp(puv, 0.0, 1.0)).rgb;
   paper *= 0.95 + 0.085 * h;
   if (puv.x < 0.0 || puv.y < 0.0 || puv.x > 1.0 || puv.y > 1.0) {
-    // 그림 밖은 표구 비단
-    float silk = vnoise(wp * vec2(0.6, 0.02)) * 0.5 + vnoise(wp * 0.15) * 0.5;
-    paper = vec3(0.17, 0.19, 0.23) * (0.85 + 0.25 * silk);
+    // 그림 밖은 옅은 쪽빛 표구 비단 — 올이 보이고 구름무늬가 은은하다
+    float weave = vnoise(wp * vec2(1.6, 0.08)) * 0.5 + vnoise(wp * vec2(0.08, 1.6)) * 0.5;
+    float cloud = smoothstep(0.55, 0.7, fbm(wp * 0.012)) - smoothstep(0.72, 0.8, fbm(wp * 0.012));
+    paper = vec3(0.74, 0.77, 0.79) * (0.93 + 0.1 * weave) - cloud * 0.05;
+    // 그림과 비단 사이의 가는 띠
+    float d = max(max(-wp.x, wp.x - uWorld.x), max(-wp.y, wp.y - uWorld.y));
+    paper = mix(vec3(0.42, 0.36, 0.3), paper, smoothstep(3.0, 8.0, d));
   }
 
   vec3 col = mix(paper, pig * (0.9 + 0.14 * h), density);
@@ -144,6 +148,11 @@ export class Compositor {
 
   setInk(ink: Texture): void {
     this.mesh.shader!.resources.uInk = ink.source;
+  }
+
+  /** 방이 바뀌면 바탕 그림도 바뀐다 */
+  setPaper(paper: Texture): void {
+    this.mesh.shader!.resources.uPaper = paper.source;
   }
 
   resize(cssW: number, cssH: number, inkPxW: number, inkPxH: number): void {

@@ -5,7 +5,7 @@
 import { type Vec, TAU, clamp, easeOutCubic, lerp } from '../core/math';
 import { mulberry32 } from '../core/rng';
 import { INKS, inkColor } from '../ink';
-import type { Enemy, Player, Projectile, Ring, Trace, Zone } from '../game/types';
+import type { Enemy, Gate, Player, Projectile, Ring, Trace, Zone } from '../game/types';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, mix } from '../render/color';
 import { ROBE } from '../render/sprites';
@@ -579,6 +579,22 @@ export function drawStatus(sb: SB, e: Enemy, time: number): void {
     sb.stroke([{ x: e.x - w / 2, y }, { x: e.x + w / 2, y }], { width: 4, color: DAMMUK, alpha: 0.25, dryness: 0.5, taperIn: 0.05, taperOut: 0.05, seed: e.seed + 90 });
     sb.stroke([{ x: e.x - w / 2, y }, { x: e.x - w / 2 + w * frac, y }], { width: 4, color: inkColor(e.el) === INKS.baek.color ? DAMMUK : inkColor(e.el), alpha: 0.9, dryness: 0.4, taperIn: 0.05, taperOut: 0.1, seed: e.seed + 91 });
   }
+}
+
+/* ───────── 달문 ───────── */
+
+/** 담장에 그려지는 둥근 문. near: 붓잡이가 다가온 정도 0..1 */
+export function drawGate(sb: SB, g: Gate, near: number): void {
+  const e = easeOutCubic(g.open);
+  if (e <= 0.01) return;
+  const el = g.room?.el ?? null;
+  const col = el ? (el === 'baek' ? mix(INKS.baek.color, INK, 0.45) : INKS[el].color) : INK;
+  const r = g.r * (1 + 0.06 * near);
+  const start = -Math.PI / 2 - 0.35 + (g.seed % 10) * 0.05;
+  sb.stroke(arcPoints(g.x, g.y, r, start, TAU * 0.95 * e, 34, r * 1.02), { width: 9 + 3 * near, color: col, alpha: 0.95, dryness: 0.45, taperIn: 0.1, taperOut: 0.35, seed: g.seed, wet: 0.5 });
+  sb.stroke(arcPoints(g.x, g.y, r * 0.84, start + 1.2, TAU * 0.8 * e, 30, r * 0.82), { width: 2.4, color: col, alpha: 0.5, dryness: 0.6, taperIn: 0.2, taperOut: 0.4, seed: g.seed + 1 });
+  // 문턱
+  sb.stroke([{ x: g.x - r * 0.9, y: g.y + r * 0.98 }, { x: g.x + r * 0.9, y: g.y + r * 0.98 }], { width: 4, color: INK, alpha: 0.55 * e, dryness: 0.7, taperIn: 0.1, taperOut: 0.1, seed: g.seed + 2 });
 }
 
 /* ───────── 붓잡이의 팔과 붓 ───────── */
