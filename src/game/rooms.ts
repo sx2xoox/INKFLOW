@@ -8,7 +8,7 @@ import { type Rng, mulberry32, randomSeed } from '../core/rng';
 import { INK_ORDER, type InkId } from '../ink';
 import { type EnemyKind, WALL, WORLD_H, WORLD_W } from './types';
 
-export type RoomKind = 'battle' | 'hold' | 'elite' | 'spring' | 'boss';
+export type RoomKind = 'battle' | 'hold' | 'elite' | 'spring' | 'shop' | 'boss';
 
 export interface RoomDef {
   kind: RoomKind;
@@ -27,9 +27,10 @@ export interface RoomKindInfo {
 
 export const ROOM_KINDS: Record<RoomKind, RoomKindInfo> = {
   battle: { name: '싸움', hanja: '鬪', desc: '먹귀를 모두 쓰러뜨린다' },
-  hold: { name: '버티기', hanja: '守', desc: '몰려드는 먹귀를 끝까지 견딘다' },
-  elite: { name: '정예', hanja: '將', desc: '묵괴가 지키는 방' },
+  hold: { name: '버티기', hanja: '守', desc: '몰려드는 먹귀를 끝까지 견디면 물건 한 장이 낀다' },
+  elite: { name: '정예', hanja: '將', desc: '묵괴가 지키는 물건 셋 가운데 하나를 얻는다' },
   spring: { name: '샘', hanja: '泉', desc: '먹을 씻고 기력을 되찾는다' },
+  shop: { name: '문방', hanja: '文', desc: '젖은 먹을 값으로 치르고 물건을 얻는다' },
   boss: { name: '주인', hanja: '虎', desc: '대숲의 주인 묵호와 맞선다' },
 };
 
@@ -65,6 +66,8 @@ export const OBSTACLE_SQUASH = 0.62;
 export interface RoomLayout {
   obstacles: Obstacle[];
   pond: { x: number; y: number; r: number } | null;
+  /** 문방의 서안(書案) — 다가가면 물건을 본다 */
+  desk: { x: number; y: number; r: number } | null;
 }
 
 const range = (rng: Rng, a: number, b: number): number => a + rng() * (b - a);
@@ -72,9 +75,10 @@ const range = (rng: Rng, a: number, b: number): number => a + rng() * (b - a);
 export function makeLayout(def: RoomDef): RoomLayout {
   const rng = mulberry32(def.seed);
   const obstacles: Obstacle[] = [];
-  if (def.kind === 'boss') return { obstacles: arenaEdge(rng), pond: null };
+  if (def.kind === 'boss') return { obstacles: arenaEdge(rng), pond: null, desk: null };
   const pond = def.kind === 'spring' ? { x: WORLD_W / 2, y: WORLD_H / 2 + 40, r: 120 } : null;
-  const count = def.kind === 'elite' ? 4 : def.kind === 'spring' ? 6 : 5 + Math.floor(rng() * 3);
+  const desk = def.kind === 'shop' ? { x: WORLD_W / 2, y: WORLD_H / 2 + 10, r: 95 } : null;
+  const count = def.kind === 'elite' ? 4 : def.kind === 'spring' || def.kind === 'shop' ? 6 : 5 + Math.floor(rng() * 3);
 
   for (let tries = 0; obstacles.length < count && tries < 400; tries++) {
     const kind: ObstacleKind = rng() < 0.45 ? 'bamboo' : 'rock';
@@ -85,10 +89,11 @@ export function makeLayout(def: RoomDef): RoomLayout {
     // 한가운데는 싸울 자리로 비워 둔다
     if (Math.hypot(x - WORLD_W / 2, (y - WORLD_H / 2) * 1.4) < 210) continue;
     if (pond && Math.hypot(x - pond.x, y - pond.y) < pond.r + 170) continue;
+    if (desk && Math.hypot(x - desk.x, y - desk.y) < desk.r + 170) continue;
     if (obstacles.some((o) => Math.hypot(x - o.x, (y - o.y) / OBSTACLE_SQUASH) < r + o.r + 110)) continue;
     obstacles.push({ kind, x, y, r, seed: Math.floor(rng() * 1e6) });
   }
-  return { obstacles, pond };
+  return { obstacles, pond, desk };
 }
 
 /** 주인의 방 — 가운데를 넓게 비우고 대숲이 둘레를 두른다 */
@@ -118,7 +123,7 @@ export interface Beat {
 export function encounter(def: RoomDef): Beat[] {
   const d = def.depth;
   // 주인은 따로 나타난다
-  if (def.kind === 'boss') return [];
+  if (def.kind === 'boss' || def.kind === 'shop' || def.kind === 'spring') return [];
   if (def.kind === 'elite') {
     return [
       { groups: [['brute', 1], ['toad', 2]], trigger: 0 },
@@ -168,17 +173,18 @@ export function nextRooms(cleared: RoomDef): RoomDef[] {
   const n = Math.random() < 0.35 ? 3 : 2;
   const els = [...INK_ORDER].sort(() => Math.random() - 0.5);
   const out: RoomDef[] = [];
-  let springUsed = cleared.kind === 'spring';
+  // 싸우지 않는 방(샘, 문방)은 문 하나에만, 바로 앞 방과 같은 종류는 피한다
+  let calmUsed = cleared.kind === 'spring' || cleared.kind === 'shop';
   for (let i = 0; i < n; i++) {
     let kind: RoomKind = 'battle';
     const r = Math.random();
     if (depth === CHAPTER.rooms - 2 && i === 0) kind = 'elite';
-    else if (r < 0.28) kind = 'hold';
-    else if (r < 0.5 && !springUsed) {
-      kind = 'spring';
-      springUsed = true;
+    else if (r < 0.26) kind = 'hold';
+    else if (r < 0.52 && !calmUsed) {
+      kind = Math.random() < 0.5 ? 'spring' : 'shop';
+      calmUsed = true;
     }
-    out.push({ kind, el: kind === 'spring' ? null : els[i], depth, seed: randomSeed() });
+    out.push({ kind, el: kind === 'spring' || kind === 'shop' ? null : els[i], depth, seed: randomSeed() });
   }
   return out.sort(() => Math.random() - 0.5);
 }

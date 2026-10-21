@@ -7,6 +7,7 @@ import { clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
 import type { Enemy } from '../game/types';
 import { TIGER_BODY } from '../game/boss';
+import { ARTIFACTS } from '../game/artifacts';
 import { TIGER_FRAMES, type TigerPoseName } from '../render/tiger';
 import { WORLD_H, WORLD_W } from '../game/types';
 import { INKS, inkColor } from '../ink';
@@ -782,6 +783,32 @@ export class View {
         d.scale.set(1 / res);
         d.position.set(gate.x, WALL_TOP + 48);
         d.alpha = a * near;
+      }
+    }
+    // 문방 — 서안 위에 놓인 물건들이 떠 있다
+    const desk = g.layout.desk;
+    if (desk && g.roomPhase === 'shop') {
+      const res = textRes(this.app.renderer.resolution * this.scale * 1.15);
+      g.stock.forEach((id, i) => {
+        const a = ARTIFACTS[id];
+        const x = desk.x + (i - (g.stock.length - 1) / 2) * 62;
+        const y = desk.y - 78 + Math.sin(g.time * 2 + i * 1.7) * 4;
+        const col = a.ink === 'baek' ? ([96, 92, 86] as const) : INKS[a.ink].edge;
+        const s = this.textPool.next();
+        s.texture = this.text.get(a.glyph, { size: 30, color: col, res, weight: 900, halo: 3 });
+        s.anchor.set(0.5);
+        s.scale.set(1 / res);
+        s.position.set(x, y);
+        s.alpha = 1;
+      });
+      const near = clamp(1 - (Math.hypot(g.player.x - desk.x, g.player.y - desk.y) - 120) / 200, 0, 1);
+      if (near > 0.05) {
+        const l = this.textPool.next();
+        l.texture = this.text.get('서안 — 물건을 본다', { size: 15, color: INK, res, weight: 900, halo: 2.4 });
+        l.anchor.set(0.5);
+        l.scale.set(1 / res);
+        l.position.set(desk.x, desk.y + 58);
+        l.alpha = near;
       }
     }
     for (const ft of g.texts) {

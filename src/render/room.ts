@@ -27,6 +27,7 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
     if (y < WALL_TOP + 20) return true;
     if (Math.hypot(x - ENTRANCE.x, y - ENTRANCE.y) < 90 + pad) return true;
     if (layout.pond && Math.hypot(x - layout.pond.x, (y - layout.pond.y) / 0.6) < layout.pond.r + 40 + pad) return true;
+    if (layout.desk && Math.hypot(x - layout.desk.x, (y - layout.desk.y) / 0.6) < layout.desk.r + 50 + pad) return true;
     return layout.obstacles.some((o) => Math.hypot(x - o.x, (y - o.y) / 0.62) < o.r + 30 + pad);
   };
 
@@ -64,6 +65,7 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
 
   if (layout.pond) paintPond(ctx, layout.pond.x, layout.pond.y, layout.pond.r, rng);
   if (def.kind === 'boss') paintTigerSigns(ctx, w, h, rng, blocked);
+  if (layout.desk) paintDesk(ctx, layout.desk.x, layout.desk.y, rng);
   paintSteppingStones(ctx, w, h, rng);
   paintWall(ctx, w, rng);
   paintBorder(ctx, w, h, rng);
@@ -124,6 +126,80 @@ function paintWall(ctx: Ctx, w: number, rng: Rng): void {
     dot(ctx, x, roofY + 10, 4.2, INK, 0.75, Math.floor(rng() * 1e6));
     brushStroke(ctx, [{ x, y: roofY - 8 }, { x: x + 2, y: roofY + 6 }], { width: 2, color: INK, alpha: 0.35, dryness: 0.6, seed: Math.floor(rng() * 1e6) });
   }
+}
+
+/* ───────── 문방 ───────── */
+
+const WOOD: RGB = [128, 92, 60];
+const MAT: RGB = [206, 178, 120];
+
+/** 서안(書案) — 돗자리 위의 낮은 책상에 벼루와 붓, 두루마리가 놓였다 */
+function paintDesk(ctx: Ctx, x: number, y: number, rng: Rng): void {
+  const seed = Math.floor(rng() * 1e6);
+  // 돗자리
+  wash(ctx, x, y + 26, 150, MAT, 0.32, seed, 0.42);
+  for (let i = -5; i <= 5; i++) {
+    brushStroke(ctx, [{ x: x - 140, y: y + 26 + i * 10 }, { x: x + 140, y: y + 26 + i * 10 + 1 }], {
+      width: 1.4,
+      color: mix(MAT, INK, 0.35),
+      alpha: 0.22 * (1 - Math.abs(i) / 6),
+      dryness: 0.7,
+      taperIn: 0.1,
+      taperOut: 0.1,
+      seed: seed + 10 + i,
+    });
+  }
+  // 그림자
+  wash(ctx, x, y + 34, 120, DAMMUK, 0.16, seed + 1, 0.22);
+  // 다리
+  for (const s of [-1, 1]) {
+    brushStroke(ctx, [{ x: x + s * 92, y: y - 6 }, { x: x + s * 94, y: y + 30 }], { width: 7, color: mix(WOOD, INK, 0.3), alpha: 0.9, dryness: 0.35, taperIn: 0.05, taperOut: 0.2, seed: seed + 20 + s });
+    brushStroke(ctx, [{ x: x + s * 60, y: y + 2 }, { x: x + s * 61, y: y + 40 }], { width: 6, color: mix(WOOD, INK, 0.45), alpha: 0.8, dryness: 0.4, taperIn: 0.05, taperOut: 0.2, seed: seed + 24 + s });
+  }
+  // 상판 — 비스듬히 내려다본 판, 양 끝이 살짝 들린 서안
+  ctx.beginPath();
+  ctx.moveTo(x - 112, y - 30);
+  ctx.quadraticCurveTo(x, y - 34, x + 112, y - 30);
+  ctx.lineTo(x + 100, y - 2);
+  ctx.quadraticCurveTo(x, y + 1, x - 100, y - 2);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, y - 34, 0, y);
+  g.addColorStop(0, rgba(mix(WOOD, PAPER, 0.35), 0.95));
+  g.addColorStop(1, rgba(WOOD, 0.95));
+  ctx.fillStyle = g;
+  ctx.fill();
+  brushStroke(ctx, [{ x: x - 118, y: y - 36 }, { x: x - 108, y: y - 31 }, { x: x, y: y - 34 }, { x: x + 108, y: y - 31 }, { x: x + 118, y: y - 36 }], {
+    width: 3.2,
+    color: INK,
+    alpha: 0.85,
+    dryness: 0.4,
+    taperIn: 0.2,
+    taperOut: 0.2,
+    seed: seed + 30,
+  });
+  brushStroke(ctx, [{ x: x - 100, y: y - 1 }, { x: x, y: y + 2 }, { x: x + 100, y: y - 1 }], { width: 5, color: mix(WOOD, INK, 0.5), alpha: 0.85, dryness: 0.45, taperIn: 0.05, taperOut: 0.05, seed: seed + 31 });
+  // 나뭇결
+  for (let i = 0; i < 4; i++) {
+    const yy = y - 26 + i * 6;
+    brushStroke(ctx, [{ x: x - 90 + rng() * 20, y: yy }, { x: x + 80 + rng() * 20, y: yy + rng() * 2 }], { width: 1.1, color: mix(WOOD, INK, 0.4), alpha: 0.3, dryness: 0.8, seed: seed + 40 + i });
+  }
+  // 벼루와 먹
+  inkBlob(ctx, x - 62, y - 18, 13, { color: mix(INK, DAMMUK, 0.2), alpha: 0.95, seed: seed + 50, wobble: 0.05, squash: 0.55, halo: 0, light: 0.25 });
+  inkBlob(ctx, x - 62, y - 19, 7, { color: INK, alpha: 1, seed: seed + 51, wobble: 0.1, squash: 0.5, halo: 0 });
+  brushStroke(ctx, [{ x: x - 44, y: y - 26 }, { x: x - 36, y: y - 13 }], { width: 6, color: INK, alpha: 0.95, dryness: 0.2, taperIn: 0, taperOut: 0, seed: seed + 52 });
+  // 붓걸이와 붓 셋
+  brushStroke(ctx, [{ x: x + 20, y: y - 42 }, { x: x + 70, y: y - 43 }], { width: 3, color: mix(WOOD, INK, 0.45), alpha: 0.9, dryness: 0.3, taperIn: 0.05, taperOut: 0.05, seed: seed + 60 });
+  for (const s of [0, 1]) brushStroke(ctx, [{ x: x + 22 + s * 46, y: y - 43 }, { x: x + 22 + s * 46, y: y - 26 }], { width: 2.4, color: mix(WOOD, INK, 0.45), alpha: 0.9, seed: seed + 61 + s });
+  for (let k = 0; k < 3; k++) {
+    const bx = x + 32 + k * 12;
+    brushStroke(ctx, [{ x: bx, y: y - 44 }, { x: bx + 1, y: y - 30 }], { width: 2.2, color: mix(WOOD, PAPER, 0.2), alpha: 0.95, seed: seed + 64 + k });
+    brushStroke(ctx, [{ x: bx + 1, y: y - 31 }, { x: bx + 1.5, y: y - 24 }], { width: 3.4, color: INK, alpha: 0.95, taperIn: 0.1, taperOut: 0.9, seed: seed + 67 + k });
+  }
+  // 두루마리
+  brushStroke(ctx, [{ x: x - 20, y: y - 12 }, { x: x + 12, y: y - 13 }], { width: 7, color: PAPER_LIGHT, alpha: 1, dryness: 0, wet: 0, taperIn: 0, taperOut: 0, seed: seed + 70 });
+  brushStroke(ctx, [{ x: x - 20, y: y - 16 }, { x: x + 12, y: y - 17 }], { width: 1.2, color: INK, alpha: 0.6, dryness: 0.4, seed: seed + 71 });
+  brushStroke(ctx, [{ x: x - 20, y: y - 9 }, { x: x + 12, y: y - 10 }], { width: 1.2, color: INK, alpha: 0.6, dryness: 0.4, seed: seed + 72 });
+  dot(ctx, x + 14, y - 13, 3.2, mix(WOOD, INK, 0.4), 0.95, seed + 73);
 }
 
 /* ───────── 주인의 방 ───────── */

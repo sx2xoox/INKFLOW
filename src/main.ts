@@ -10,9 +10,10 @@ import { Game, type InputFrame } from './game/game';
 import { WORLD_H, WORLD_W } from './game/types';
 import { View } from './gfx/view';
 import { ResolutionGovernor } from './gfx/governor';
-import { INK_ORDER, type InkId, inkName } from './ink';
+import { EXCESS_COST, INK_ORDER, type InkId, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
 import { CHAPTER, ROOM_KINDS } from './game/rooms';
+import { ARTIFACT_LIST, type ArtifactId } from './game/artifacts';
 import { Input } from './input';
 import { UI } from './ui';
 import { setupGallery } from './gallery';
@@ -42,6 +43,9 @@ function canvasGlyphs(): string {
     `${CHAPTER.name}${CHAPTER.hanja}一二三四五六終`,
     '묵호 · 대숲의 주인 墨虎 · 대숲의 주인이 내려온다 을 두르다 묵호가 먹으로 갈아입는다 — 먹이 이긴다',
     '대숲의 주인을 그려 내다 의 마지막 폭에 낙관을 찍는다',
+    '太過 상극 ×1.8 약점 없음 이 넘치다 약점이 사라진다 대가: 지닌 물건 서안 — 물건을 본다 서안에 다가가 물건을 본다 문방에서 물건을 고르다',
+    ...Object.values(EXCESS_COST).flatMap((c) => [c.title, c.cost]),
+    ...ARTIFACT_LIST.flatMap((a) => [a.glyph, a.name, a.desc]),
     ...Object.values(ROOM_KINDS).flatMap((k) => [k.name, k.hanja, k.desc]),
   ];
   for (const c of CHARACTERS) {
@@ -171,10 +175,21 @@ async function boot(): Promise<void> {
   };
   requestAnimationFrame(loop);
 
+  // 시험용: 물건을 지니고 시작한다 (?items=pine-soot,brazier)
+  const itemsParam = params.get('items');
+  const giveItems = (): void => {
+    for (const id of (itemsParam ?? '').split(',')) if (ARTIFACT_LIST.some((a) => a.id === id)) game.acquire(id as ArtifactId);
+  };
   // 시험용: 곧장 대숲의 주인에게 (?boss 또는 ?boss=jeok)
   if (params.has('boss')) {
     const el = (INK_ORDER as readonly string[]).includes(params.get('boss') ?? '') ? (params.get('boss') as InkId) : 'heuk';
     game.debugRoom({ kind: 'boss', el, depth: CHAPTER.rooms - 1, seed: 4242 });
+    giveItems();
+  }
+  // 시험용: 곧장 문방으로 (?shop)
+  if (params.has('shop')) {
+    game.debugRoom({ kind: 'shop', el: null, depth: 1, seed: 777 });
+    giveItems();
   }
 
   if (DEMO) {
@@ -217,7 +232,7 @@ function demoInput(g: Game, t: number): InputFrame {
   const a = t * 0.6;
   let cx = WORLD_W / 2 + Math.cos(a) * 260;
   let cy = WORLD_H / 2 + 60 + Math.sin(a * 1.3) * 150;
-  const goal = g.roomPhase === 'open' && g.gates.length ? g.gates[Math.floor(t / 1000) % g.gates.length] : g.roomPhase === 'spring' ? g.layout.pond : null;
+  const goal = g.roomPhase === 'open' && g.gates.length ? g.gates[Math.floor(t / 1000) % g.gates.length] : g.roomPhase === 'spring' ? g.layout.pond : g.roomPhase === 'shop' ? g.layout.desk : null;
   if (goal) {
     cx = goal.x;
     cy = goal.y;

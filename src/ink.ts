@@ -124,16 +124,32 @@ export const counterOf = (target: InkId): InkId => INK_ORDER.find((id) => OVERCO
 
 export const STRONG_MULT = 1.5;
 export const WEAK_MULT = 0.7;
+/** 태과의 상승(相乘) — 넘치는 기운은 이기던 상대를 더 세게 누른다 */
+export const EXCESS_STRONG_MULT = 1.8;
 
-/** 공격 먹이 대상의 속성에 대해 갖는 배율 */
-export function affinity(attack: InkId | null, target: InkId): number {
+/**
+ * 공격 먹이 대상의 속성에 대해 갖는 배율.
+ * 태과(excess)면 상승으로 더 세게 누르고, 상모(相侮)로 나를 이기던 상대를 거꾸로 업신여겨 약점이 사라진다.
+ */
+export function affinity(attack: InkId | null, target: InkId, excess = false): number {
   if (!attack) return 1;
-  if (OVERCOMES[attack] === target) return STRONG_MULT;
-  if (OVERCOMES[target] === attack) return WEAK_MULT;
+  if (OVERCOMES[attack] === target) return excess ? EXCESS_STRONG_MULT : STRONG_MULT;
+  if (OVERCOMES[target] === attack) return excess ? 1 : WEAK_MULT;
   return 1;
 }
 
 export const INK_MAX = 100;
+/** 주속성 먹이 이만큼 차면 태과(太過) — 강해지지만 넘친 먹이 나를 해친다 */
+export const EXCESS_AT = 80;
+
+/** 태과의 대가 — 먹마다 넘친 기운이 붓잡이를 해치는 방식이 다르다 */
+export const EXCESS_COST: Record<InkId, { title: string; cost: string }> = {
+  cheong: { title: '덩굴이 웃자라다', cost: '휘두르는 속도 −15%' },
+  jeok: { title: '불길이 손을 태우다', cost: '셋째 획마다 기력 −3' },
+  hwang: { title: '땅이 발을 붙잡다', cost: '비켜 서기 재사용 +40%' },
+  baek: { title: '쇠가 부러지기 쉽다', cost: '받는 피해 +25%' },
+  heuk: { title: '물이 몸을 무겁게 하다', cost: '걸음 −15%' },
+};
 /**
  * 주속성이 바뀌려면 새 먹이 지금 먹보다 이만큼 더 강해야 한다.
  * 비슷한 수치에서 공격이 정신없이 오락가락하지 않게 하는 여유폭.
@@ -160,24 +176,50 @@ export function resolveDominant(values: InkValues, current: InkId | null): InkId
   return current;
 }
 
-export function applyDeltas(values: InkValues, deltas: InkDeltas): InkValues {
-  const out = { ...values };
+/** 젖은 먹에 더하고 뺀다 — 굳은 먹과 합쳐 INK_MAX를 넘지 않는다 */
+function applyWet(wet: InkValues, locked: InkValues, deltas: InkDeltas): InkValues {
+  const out = { ...wet };
   for (const id of INK_ORDER) {
     const d = deltas[id];
-    if (d) out[id] = clamp(out[id] + d, 0, INK_MAX);
+    if (d) out[id] = clamp(out[id] + d, 0, INK_MAX - locked[id]);
   }
   return out;
 }
 
+const sum = (a: InkValues, b: InkValues): InkValues => {
+  const out = emptyInk();
+  for (const id of INK_ORDER) out[id] = a[id] + b[id];
+  return out;
+};
+
+/** 젖은 먹이 마르는 빠르기 — 많을수록 빨리 마른다. 싸움 한 판이면 절반쯤 */
+const DRY_RATE = 0.017;
+const DRY_BASE = 0.04;
+
+/**
+ * 먹의 기운은 두 겹이다.
+ *  - 젖은 먹(wet): 먹방울과 보상 카드로 얻는다. 싸우는 동안 조금씩 마른다.
+ *  - 굳은 먹(locked): 지닌 물건이 붙잡고 있어 마르지도 씻기지도 않는다.
+ * 둘을 합친 것이 그 먹의 기운(values)이고, 가장 강한 먹이 주속성이다.
+ */
 export class InkState {
+  wet: InkValues = emptyInk();
+  locked: InkValues = emptyInk();
   values: InkValues = emptyInk();
   dominant: InkId | null = null;
+  /** 태과에 든 먹 */
+  excess: InkId | null = null;
   /** 먹이 바뀐 순간 화면 연출을 위해 */
   onSwitch: ((from: InkId | null, to: InkId | null) => void) | null = null;
+  /** 태과에 들거나 벗어난 순간 */
+  onExcess: ((ink: InkId | null) => void) | null = null;
 
   reset(): void {
+    this.wet = emptyInk();
+    this.locked = emptyInk();
     this.values = emptyInk();
     this.dominant = null;
+    this.excess = null;
   }
 
   /** 주속성 먹의 기운 0..1 — 공격의 세기를 정한다 */
@@ -186,17 +228,63 @@ export class InkState {
   }
 
   apply(deltas: InkDeltas): void {
-    this.values = applyDeltas(this.values, deltas);
+    this.wet = applyWet(this.wet, this.locked, deltas);
+    this.sync();
+  }
+
+  /** 물건이 먹을 붙잡는다 — 그만큼은 마르지 않는다 */
+  lock(id: InkId, amount: number): void {
+    this.locked[id] = clamp(this.locked[id] + amount, 0, INK_MAX);
+    this.wet[id] = Math.min(this.wet[id], INK_MAX - this.locked[id]);
+    this.sync();
+  }
+
+  /**
+   * 젖은 먹이 마른다. mul은 마르는 빠르기 배율, flow는 마른 먹 가운데
+   * 상생의 다음 먹으로 스며드는 몫(오행도).
+   * 태과에 든 먹은 넘쳐서 두 배로 빨리 마른다.
+   */
+  dry(dt: number, mul = 1, flow = 0): void {
+    if (dt <= 0) return;
+    const gain = emptyInk();
+    let changed = false;
+    for (const id of INK_ORDER) {
+      const w = this.wet[id];
+      if (w <= 0) continue;
+      const rate = (DRY_RATE * w + DRY_BASE) * mul * (this.excess === id ? 2 : 1);
+      const lost = Math.min(w, rate * dt);
+      this.wet[id] = w - lost < 0.02 ? 0 : w - lost;
+      if (flow > 0) gain[GENERATES[id]] += lost * flow;
+      changed = true;
+    }
+    if (!changed) return;
+    if (flow > 0) this.wet = applyWet(this.wet, this.locked, gain);
+    this.sync();
+  }
+
+  preview(deltas: InkDeltas, lock?: { id: InkId; amount: number }): { values: InkValues; dominant: InkId | null } {
+    const locked = { ...this.locked };
+    if (lock) locked[lock.id] = clamp(locked[lock.id] + lock.amount, 0, INK_MAX);
+    const wet = applyWet(this.wet, locked, deltas);
+    for (const id of INK_ORDER) wet[id] = Math.min(wet[id], INK_MAX - locked[id]);
+    const values = sum(locked, wet);
+    return { values, dominant: resolveDominant(values, this.dominant) };
+  }
+
+  private sync(): void {
+    this.values = sum(this.locked, this.wet);
     const next = resolveDominant(this.values, this.dominant);
     if (next !== this.dominant) {
       const prev = this.dominant;
       this.dominant = next;
       this.onSwitch?.(prev, next);
     }
-  }
-
-  preview(deltas: InkDeltas): { values: InkValues; dominant: InkId | null } {
-    const values = applyDeltas(this.values, deltas);
-    return { values, dominant: resolveDominant(values, this.dominant) };
+    // 문턱 언저리에서 들락날락하지 않게, 한번 들면 조금 더 내려가야 벗어난다
+    const d = this.dominant;
+    const ex = d && (this.values[d] >= EXCESS_AT || (this.excess === d && this.values[d] >= EXCESS_AT - 4)) ? d : null;
+    if (ex !== this.excess) {
+      this.excess = ex;
+      this.onExcess?.(ex);
+    }
   }
 }

@@ -7,7 +7,8 @@ import { mulberry32 } from './core/rng';
 import { type Game, numeral } from './game/game';
 import { CHAPTER, ROOM_KINDS, type RoomDef } from './game/rooms';
 import type { Item } from './game/items';
-import { INKS, INK_MAX, INK_ORDER, type InkId, inkHanja, inkName } from './ink';
+import { ARTIFACTS } from './game/artifacts';
+import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkDeltas, type InkId, inkHanja, inkName } from './ink';
 import { arcPoints, brushStroke, splatter, wash } from './render/brush';
 import { DAMMUK, INK, PAPER, mix, rgba } from './render/color';
 import { createPaperCanvas, paintSeal } from './render/paper';
@@ -42,7 +43,7 @@ export class UI {
     window.addEventListener('keydown', (e) => {
       if (this.game.phase === 'reward') {
         const n = Number(e.key);
-        if (n >= 1 && n <= this.cards.length) this.choose(this.cards[n - 1].item);
+        if (n >= 1 && n <= this.cards.length) this.choose(this.cards[n - 1].item, this.cards[n - 1].node);
       }
       if ((this.game.phase === 'title' || this.game.phase === 'over' || this.game.phase === 'won') && (e.code === 'Enter' || e.code === 'Space')) {
         this.game.startRun();
@@ -76,6 +77,8 @@ export class UI {
     }
     const box = el('div', 'panel pause');
     box.appendChild(el('h2', 'brush', '잠시 붓을 놓다'));
+    box.appendChild(inkBars(this.game));
+    if (this.game.artifactOrder.length) box.appendChild(ownedList(this.game, true));
     box.appendChild(controls());
     const b = el('button', 'btn', '다시 붓을 들다');
     b.onclick = () => this.onPauseToggle?.();
@@ -113,9 +116,11 @@ export class UI {
     let next = '';
     if (g.mode === 'endless') next = `${numeral(g.waveNo + 1)} 물결 — ${themes} 먹귀가 온다. 상극인 먹: ${counters}`;
     else if (g.cleared.length === 0) next = `첫 방 — ${themes} 먹귀가 기다린다. 상극인 먹: ${counters}`;
+    else if (g.rewards.some((r) => r.price)) next = '젖은 먹은 싸우는 동안 마른다 — 마르기 전에 물건으로 굳혀 두라. 값은 그 먹의 젖은 기운으로 치른다';
     else next = '고르고 나면 담장에 다음 방으로 가는 문이 그려진다';
     box.appendChild(el('p', 'next', next));
     box.appendChild(inkBars(g));
+    if (g.artifactOrder.length) box.appendChild(ownedList(g, false));
 
     const row = el('div', g.rewards.length > 3 ? 'cards five' : 'cards');
     g.rewards.forEach((item, i) => {
@@ -130,18 +135,28 @@ export class UI {
 
   private card(item: Item, i: number): HTMLElement {
     const g = this.game;
-    const card = el('button', `card kind-${item.kind}`);
+    const afford = g.canAfford(item);
+    const card = el('button', `card kind-${item.kind}${afford ? '' : ' poor'}`);
     const art = el('canvas', 'art') as HTMLCanvasElement;
     drawCardArt(art, item);
     card.appendChild(art);
-    const glyphInk = item.kind === 'shift' ? item.inks[1] : item.kind === 'raise' ? item.inks[0] : null;
-    card.appendChild(el('div', 'glyph', `<span style="color:${item.kind === 'relic' ? rgba(INK, 1) : textInk(glyphInk)}">${item.glyph}</span>`));
+    const glyphInk = item.kind === 'shift' ? item.inks[1] : item.kind === 'raise' || item.kind === 'artifact' ? item.inks[0] : null;
+    card.appendChild(el('div', 'glyph', `<span style="color:${item.kind === 'relic' || item.kind === 'leave' ? rgba(INK, 1) : textInk(glyphInk)}">${item.glyph}</span>`));
     card.appendChild(el('div', 'name', item.name));
     card.appendChild(el('div', 'desc', item.desc));
-    if (item.tag) card.appendChild(el('div', 'tag-chip', item.tag));
+    if (item.tag) card.appendChild(el('div', `tag-chip ${item.kind === 'artifact' ? 'lock' : ''}`, item.tag));
+    if (item.price) {
+      const have = Math.floor(g.ink.wet[item.price.ink]);
+      card.appendChild(
+        el('div', 'price', `값 · <b style="color:${textInk(item.price.ink)}">${INKS[item.price.ink].hanja}</b> 젖은 먹 ${item.price.amount} <span class="have">(지금 ${have})</span>`),
+      );
+    }
 
-    if (item.deltas) {
-      const pv = g.ink.preview(item.deltas);
+    const deltas: InkDeltas = { ...(item.deltas ?? {}) };
+    if (item.price) deltas[item.price.ink] = (deltas[item.price.ink] ?? 0) - item.price.amount;
+    const lock = item.artifact ? { id: ARTIFACTS[item.artifact].ink, amount: ARTIFACTS[item.artifact].lock } : undefined;
+    if (item.deltas || lock) {
+      const pv = g.ink.preview(deltas, lock);
       const now = g.ink.dominant;
       const after = pv.dominant;
       const moves = g.character.combo(after).map((m) => m.name).join(' → ');
@@ -152,14 +167,25 @@ export class UI {
         : `주속성 그대로 · <b style="color:${textInk(after)}">${inkHanja(after)} ${inkName(after)}</b>`;
       card.appendChild(dom);
       card.appendChild(el('div', 'moves', moves));
+      if (after && pv.values[after] >= EXCESS_AT) {
+        card.appendChild(el('div', 'excess', `太過 · ${EXCESS_COST[after].cost}`));
+      }
     }
     card.appendChild(el('div', 'key', `${i + 1}`));
-    card.onclick = () => this.choose(item);
+    card.onclick = () => this.choose(item, card);
     return card;
   }
 
-  private choose(item: Item): void {
+  private choose(item: Item, node?: HTMLElement): void {
     if (this.game.phase !== 'reward') return;
+    if (!this.game.canAfford(item)) {
+      // 먹이 모자라다 — 카드가 고개를 젓는다
+      const n = node ?? this.cards.find((c) => c.item === item)?.node;
+      n?.classList.remove('nope');
+      void n?.offsetWidth;
+      n?.classList.add('nope');
+      return;
+    }
     this.onSelect?.();
     this.game.chooseReward(item);
   }
@@ -229,15 +255,38 @@ function controls(): HTMLElement {
   );
 }
 
+/** 다섯 먹의 기운 — 굳은 먹(짙게)과 젖은 먹(옅게), 태과 문턱 */
 function inkBars(g: Game): HTMLElement {
   const wrap = el('div', 'inkbars');
   for (const id of INK_ORDER) {
     const d = INKS[id];
     const v = g.ink.values[id];
+    const lk = g.ink.locked[id];
+    const wt = g.ink.wet[id];
     const dom = g.ink.dominant === id;
-    const bar = el('div', `inkbar ${dom ? 'dom' : ''}`);
-    bar.innerHTML = `<span class="h" style="color:${textInk(id)}">${d.hanja}</span><span class="track"><span class="fill" style="width:${(v / INK_MAX) * 100}%;background:${rgba(d.color, 0.9)};${id === 'baek' ? 'box-shadow: inset 0 0 0 1px rgba(110,106,98,.6)' : ''}"></span></span><span class="v">${Math.round(v)}</span>`;
+    const ex = g.ink.excess === id;
+    const bar = el('div', `inkbar ${dom ? 'dom' : ''} ${ex ? 'ex' : ''}`);
+    const edge = id === 'baek' ? 'box-shadow: inset 0 0 0 1px rgba(110,106,98,.6);' : '';
+    bar.innerHTML =
+      `<span class="h" style="color:${textInk(id)}">${d.hanja}</span>` +
+      `<span class="track"><span class="fill lock" style="width:${(lk / INK_MAX) * 100}%;background:${rgba(mix(d.color, INK, 0.28), 0.95)};${edge}"></span>` +
+      `<span class="fill wet" style="width:${(wt / INK_MAX) * 100}%;background:${rgba(d.color, 0.55)};${edge}"></span>` +
+      `<span class="mark" style="left:${EXCESS_AT}%"></span></span>` +
+      `<span class="v">${Math.round(v)}${lk > 0 ? `<small>굳 ${Math.round(lk)}</small>` : ''}</span>`;
     wrap.appendChild(bar);
+  }
+  return wrap;
+}
+
+/** 지닌 물건 — 보상 화면에는 글자만, 멈춤 화면에는 효과까지 */
+function ownedList(g: Game, full: boolean): HTMLElement {
+  const wrap = el('div', full ? 'owned full' : 'owned');
+  if (!full) wrap.appendChild(el('span', 'label', '지닌 물건'));
+  for (const id of g.artifactOrder) {
+    const a = ARTIFACTS[id];
+    const chip = el('span', 'item', `<b style="color:${textInk(a.ink)}">${a.glyph}</b>${full ? ` ${a.name} <i>${a.desc}</i>` : ''}`);
+    chip.title = `${a.name} — ${a.desc} (굳은 ${INKS[a.ink].hanja} ${a.lock})`;
+    wrap.appendChild(chip);
   }
   return wrap;
 }
@@ -304,6 +353,31 @@ function drawCardArt(c: HTMLCanvasElement, item: Item): void {
     case 'relic': {
       brushStroke(ctx, arcPoints(W / 2, H / 2, 40, rng() * TAU, TAU * 0.93, 30, 41), { width: 9, color: INK, alpha: 0.75, dryness: 0.55, taperIn: 0.08, taperOut: 0.4, seed });
       wash(ctx, W / 2, H / 2, 46, DAMMUK, 0.08, seed + 1);
+      break;
+    }
+    case 'artifact': {
+      // 물건은 그 먹으로 굳힌 네모난 인장처럼
+      const d = INKS[item.inks[0]];
+      wash(ctx, W / 2, H / 2, 64, d.color, 0.16, seed, 0.55);
+      const r = 36;
+      const pts = [
+        { x: W / 2 - r, y: H / 2 - r },
+        { x: W / 2 + r, y: H / 2 - r },
+        { x: W / 2 + r, y: H / 2 + r },
+        { x: W / 2 - r, y: H / 2 + r },
+        { x: W / 2 - r, y: H / 2 - r + 2 },
+      ];
+      brushStroke(ctx, pts, { width: 7, color: mix(d.color, INK, 0.35), alpha: 0.85, dryness: 0.6, taperIn: 0.04, taperOut: 0.08, seed: seed + 1, edgeColor: d.edge });
+      splatter(ctx, W / 2 + r + 18, H / 2 - r + 6, 9, d.color, seed + 2, 0.45);
+      break;
+    }
+    case 'leave': {
+      // 비켜 지나가는 발걸음
+      for (let k = 0; k < 4; k++) {
+        const x = 40 + k * 46;
+        const y = H * 0.62 - (k % 2) * 14;
+        brushStroke(ctx, [{ x, y }, { x: x + 12, y: y - 3 }], { width: 8, color: DAMMUK, alpha: 0.45, dryness: 0.6, taperIn: 0.3, taperOut: 0.6, seed: seed + k });
+      }
       break;
     }
   }

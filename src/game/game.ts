@@ -1,12 +1,13 @@
 import { TAU, clamp, dist, rand, randInt, shuffle, weighted } from '../core/math';
 import type { SoundEvent } from '../audio';
 import { randomSeed } from '../core/rng';
-import { INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
+import { EXCESS_COST, INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
 import { type RGB, DAMMUK, INK, SEAL } from '../render/color';
 import { BRUSH_WIELDER, type CharacterDef, critChance } from './characters';
 import { TIGER_BODY, tigerHitCircles, untouchable, updateTiger } from './boss';
 import { ENEMY_KINDS, makeEnemy, thinkEnemy } from './enemies';
-import { type Item, rollRewards, springItems, startingItems } from './items';
+import { ARTIFACTS, type ArtifactId } from './artifacts';
+import { type Item, artifactChoice, rollRewards, shopItems, springItems, startingItems } from './items';
 import { BASE_DAMAGE, type Move, inShape, shapeCenter } from './moves';
 import {
   type Beat,
@@ -55,7 +56,7 @@ export type Phase = 'title' | 'reward' | 'play' | 'over' | 'won';
 /** 탐험: 방을 열어 나간다. 끝없는 물결: 한 방에서 계속 버틴다. */
 export type Mode = 'explore' | 'endless';
 /** 방의 진행 — 싸우는 중, 다 그려 내는 중(낙관), 샘, 문이 열림 */
-export type RoomPhase = 'fight' | 'clearing' | 'spring' | 'open';
+export type RoomPhase = 'fight' | 'clearing' | 'spring' | 'shop' | 'open';
 
 export interface InputFrame {
   moveX: number;
@@ -170,7 +171,7 @@ export class Game {
 
   /* 탐험 */
   room: RoomDef = firstRoom();
-  layout: RoomLayout = { obstacles: [], pond: null };
+  layout: RoomLayout = { obstacles: [], pond: null, desk: null };
   roomPhase: RoomPhase = 'fight';
   /** 방이 바뀔 때마다 오른다 — 화면이 그림을 새로 그린다 */
   roomVersion = 0;
@@ -184,7 +185,17 @@ export class Game {
   private beatIndex = 0;
   private beatDelay = 0;
   private clearT = 0;
-  private rewardFor: 'start' | 'clear' | 'spring' | 'wave' = 'start';
+  private rewardFor: 'start' | 'clear' | 'spring' | 'wave' | 'shop' = 'start';
+  /** 지닌 물건 */
+  artifacts = new Set<ArtifactId>();
+  /** 지닌 물건을 얻은 차례대로 — 화면에 늘어놓는다 */
+  artifactOrder: ArtifactId[] = [];
+  /** 이번 문방의 서안에 놓인 물건 */
+  stock: ArtifactId[] = [];
+  /** 태과 알림을 너무 자주 띄우지 않게 */
+  private excessNoticeT = 0;
+  /** 태과일 때 넘친 먹이 떨어지는 박자 */
+  private dripT = 0;
 
   onPhase: ((p: Phase) => void) | null = null;
 
@@ -203,6 +214,31 @@ export class Game {
       // 새 먹의 첫 타부터
       pl.comboStep = 0;
     };
+    this.ink.onExcess = (ink) => {
+      if (!ink || this.phase !== 'play') return;
+      const pl = this.player;
+      const col = inkColor(ink);
+      this.sounds.push({ type: 'switch', ink });
+      this.addRing('burst', pl.x, pl.y - 18, 20, 90, 0.5, 8, col);
+      if (this.excessNoticeT > 0) return;
+      this.excessNoticeT = 25;
+      const c = EXCESS_COST[ink];
+      this.banner = { title: `${INKS[ink].name}이 넘치다`, sub: `太過 — 상극 ×1.8 · 약점이 사라진다 · 대가: ${c.cost}`, t: 0, dur: 2.8, color: INKS[ink].edge, low: true };
+    };
+  }
+
+  has(id: ArtifactId): boolean {
+    return this.artifacts.has(id);
+  }
+
+  /** 물건을 얻는다 — 그 먹을 붙잡고 효과를 건다 */
+  acquire(id: ArtifactId): void {
+    if (this.artifacts.has(id)) return;
+    const a = ARTIFACTS[id];
+    this.artifacts.add(id);
+    this.artifactOrder.push(id);
+    this.ink.lock(a.ink, a.lock);
+    a.gain?.(this);
   }
 
   /* ───────── 흐름 ───────── */
@@ -226,6 +262,9 @@ export class Game {
     this.cleared = [];
     this.transition = null;
     this.banner = null;
+    this.artifacts = new Set();
+    this.artifactOrder = [];
+    this.excessNoticeT = 0;
     if (mode === 'explore') {
       this.setRoom(firstRoom());
       this.nextThemes = this.room.el ? [this.room.el] : [];
@@ -239,10 +278,28 @@ export class Game {
     this.setPhase('reward');
   }
 
+  /** 문방의 물건을 살 만큼 젖은 먹이 있는지 */
+  canAfford(item: Item): boolean {
+    return !item.price || this.ink.wet[item.price.ink] >= item.price.amount - 0.001;
+  }
+
   chooseReward(item: Item): void {
-    if (this.phase !== 'reward') return;
+    if (this.phase !== 'reward' || !this.canAfford(item)) return;
+    if (item.price) this.ink.apply({ [item.price.ink]: -item.price.amount });
     if (item.deltas) this.ink.apply(item.deltas);
+    if (item.artifact) this.acquire(item.artifact);
     item.apply?.(this);
+    // 문방에서는 값을 치를 수 있는 한 더 살 수 있다
+    if (this.rewardFor === 'shop' && item.kind !== 'leave') {
+      const next = shopItems(this.artifacts, this.stock);
+      this.stock = next.stock;
+      if (next.items.some((it) => it.kind !== 'leave' && this.canAfford(it))) {
+        this.rewards = next.items;
+        this.rewardTitle = '문방에서 물건을 더 고르다';
+        this.setPhase('reward');
+        return;
+      }
+    }
     if (this.mode === 'endless') this.beginWave(this.waveNo + 1);
     else if (this.rewardFor === 'start') this.beginRoom();
     else this.openGates();
@@ -268,7 +325,7 @@ export class Game {
     this.room = def;
     this.layout = makeLayout(def);
     this.roomVersion++;
-    this.roomPhase = def.kind === 'spring' ? 'spring' : 'fight';
+    this.roomPhase = def.kind === 'spring' ? 'spring' : def.kind === 'shop' ? 'shop' : 'fight';
     const pl = this.player;
     pl.x = ENTRANCE.x;
     pl.y = ENTRANCE.y;
@@ -294,6 +351,12 @@ export class Game {
     if (def.kind === 'spring') {
       this.roomPhase = 'spring';
       this.banner = { title: where, sub: '샘에 다가가 먹을 씻는다', t: 0, dur: 2.6, color: INK };
+      return;
+    }
+    if (def.kind === 'shop') {
+      this.roomPhase = 'shop';
+      this.stock = shopItems(this.artifacts).stock;
+      this.banner = { title: where, sub: '서안에 다가가 물건을 본다 — 값은 젖은 먹으로 치른다', t: 0, dur: 2.8, color: INK };
       return;
     }
     this.roomPhase = 'fight';
@@ -353,13 +416,30 @@ export class Game {
       const pl = this.player;
       if (pond && Math.hypot(pl.x - pond.x, (pl.y - pond.y) / 0.6) < pond.r * 0.95) {
         this.healPlayer(10);
-        this.rewards = springItems(this.ink.values, this.ink.dominant);
+        this.rewards = springItems(this.ink);
         this.rewardTitle = '샘에서 먹을 씻다';
         this.rewardFor = 'spring';
         this.roomPhase = 'clearing';
         this.clearT = 0;
         this.cleared.push(def);
         this.clearedVersion++;
+        this.setPhase('reward');
+      }
+    } else if (this.roomPhase === 'shop') {
+      const desk = this.layout.desk;
+      const pl = this.player;
+      if (desk && Math.hypot(pl.x - desk.x, (pl.y - desk.y) / 0.6) < desk.r * 1.15) {
+        const shop = shopItems(this.artifacts, this.stock);
+        this.stock = shop.stock;
+        this.rewards = shop.items;
+        this.rewardTitle = '문방에서 물건을 고르다';
+        this.rewardFor = 'shop';
+        this.roomPhase = 'clearing';
+        this.clearT = 0;
+        this.cleared.push(def);
+        this.clearedVersion++;
+        pl.action = null;
+        pl.queued = false;
         this.setPhase('reward');
       }
     } else if (this.roomPhase === 'open') {
@@ -397,6 +477,7 @@ export class Game {
     this.cleared.push(this.room);
     this.clearedVersion++;
     this.sounds.push({ type: 'seal' });
+    if (this.has('pine-dropper')) this.healPlayer(10);
     this.banner =
       this.room.kind === 'boss'
         ? { title: '대숲의 주인을 그려 내다', sub: `${CHAPTER.name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
@@ -406,8 +487,15 @@ export class Game {
   private offerClearRewards(): void {
     const def = this.room;
     this.absorbPickups();
-    this.rewards = rollRewards(this.ink.values, this.ink.dominant, { guarantee: def.el, relic: def.kind === 'elite' || def.kind === 'boss' });
-    this.rewardTitle = `${numeral(def.depth + 1)} 방을 그려 내다`;
+    // 주인을 넘기면 장이 끝난다 — 고를 것 없이 마지막 문으로
+    if (def.kind === 'boss') {
+      this.openGates();
+      return;
+    }
+    // 방 종류가 곧 보상의 종류다
+    if (def.kind === 'elite') this.rewards = artifactChoice(this.artifacts, def.el);
+    else this.rewards = rollRewards(this.ink, { guarantee: def.el, owned: this.artifacts, artifacts: def.kind === 'hold' || Math.random() < 0.15 ? 1 : 0 });
+    this.rewardTitle = def.kind === 'elite' ? '묵괴가 지키던 물건' : `${numeral(def.depth + 1)} 방을 그려 내다`;
     this.rewardFor = 'clear';
     const pl = this.player;
     pl.action = null;
@@ -555,7 +643,12 @@ export class Game {
     this.waveNo = this.wave.n;
     this.wave = null;
     this.nextThemes = this.rollThemes(this.waveNo + 1);
-    this.rewards = rollRewards(this.ink.values, this.ink.dominant);
+    // 세 물결마다 물건 셋 가운데 하나, 그 밖에는 가끔 물건이 한 장 낀다
+    this.rewards =
+      this.waveNo % 3 === 0
+        ? artifactChoice(this.artifacts, this.nextThemes[0] ? counterOf(this.nextThemes[0]) : null)
+        : rollRewards(this.ink, { owned: this.artifacts, artifacts: Math.random() < 0.15 ? 1 : 0 });
+    if (this.has('pine-dropper')) this.healPlayer(10);
     this.rewardTitle = `${numeral(this.waveNo)} 물결을 넘기다`;
     this.rewardFor = 'wave';
     this.fadeStains = true;
@@ -588,6 +681,7 @@ export class Game {
     this.runTime += dt;
     if (this.mode === 'endless') this.updateWave(dt);
     else this.updateRoom(dt);
+    this.updateInk(dt);
     // 문을 지나는 동안은 붓잡이가 멈춘다
     if (this.transition) input = { ...input, moveX: 0, moveY: -0.4, attack: false, dash: false };
     this.updatePlayer(dt, input);
@@ -597,6 +691,20 @@ export class Game {
     this.updatePickups(dt);
     this.enemies = this.enemies.filter((e) => !e.dead);
     if (this.player.hp <= 0) this.die();
+  }
+
+  /** 싸우는 동안 젖은 먹이 마르고, 태과면 넘친 먹이 떨어진다 */
+  private updateInk(dt: number): void {
+    this.excessNoticeT = Math.max(0, this.excessNoticeT - dt);
+    const fighting = this.mode === 'endless' ? !!this.wave : this.roomPhase === 'fight';
+    if (fighting && !this.transition) this.ink.dry(dt, this.has('pine-soot') ? 0.6 : 1, this.has('five-elements') ? 0.5 : 0);
+    const ex = this.ink.excess;
+    if (!ex) return;
+    this.dripT -= dt;
+    if (this.dripT > 0) return;
+    this.dripT = rand(0.08, 0.16);
+    const pl = this.player;
+    this.addParticle(pl.x + rand(-9, 9), pl.y - rand(14, 30), rand(-20, 20), rand(30, 70), rand(1.5, 3), inkColor(ex), 0.85, rand(0.25, 0.45), true);
   }
 
   /** 멈춰 있어도 흘러가는 연출들 */
@@ -753,6 +861,8 @@ export class Game {
     } else {
       let mul = pl.moveMul;
       if (pl.action) mul *= pl.action.phase === 'recovery' ? 0.65 : pl.action.move.moveMul ?? 0.4;
+      if (this.ink.excess === 'heuk') mul *= 0.85;
+      if (this.has('night-rain') && pl.hp < pl.maxHp / 3) mul *= 1.15;
       const target = pl.speed * mul;
       const k = 1 - Math.exp(-14 * dt);
       pl.vx += (mx * target - pl.vx) * k;
@@ -781,7 +891,10 @@ export class Game {
     pl.dashDx = dx / l;
     pl.dashDy = dy / l;
     pl.dashT = DASH_TIME;
-    pl.dashCd = DASH_CD * pl.dashCdMul;
+    pl.dashCd = DASH_CD * pl.dashCdMul * (this.ink.excess === 'hwang' ? 1.4 : 1);
+    // 비켜 선 자리에 남는 것들
+    if (this.has('flint')) this.addZone('embers', pl.x, pl.y, 34, 2.6, 4, 0.3);
+    if (this.has('gourd')) this.addZone('pool', pl.x + pl.dashDx * 50, pl.y + pl.dashDy * 50 + 8, 34, 3, 2, 0.3);
     pl.invuln = Math.max(pl.invuln, DASH_TIME + 0.06);
     pl.trail = [{ x: pl.x, y: pl.y - 8 }];
     this.sounds.push({ type: 'dash' });
@@ -813,7 +926,7 @@ export class Game {
       hits: new Map(),
       seed: randomSeed() % 100000,
       heals: 0,
-      speed: pl.attackSpeed,
+      speed: pl.attackSpeed * (this.ink.excess === 'cheong' ? 0.85 : 1),
     };
     pl.comboStep = (step + 1) % combo.length;
     pl.queued = false;
@@ -869,7 +982,10 @@ export class Game {
       pl.vy += Math.sin(a.aim) * m.lunge;
     }
     if (m.shake) this.shake = Math.max(this.shake, m.shake);
-    if (a.step === 2) this.punch = 1;
+    if (a.step === 2) {
+      this.punch = 1;
+      if (this.ink.excess === 'jeok') this.selfBurn(3);
+    }
     this.sounds.push(m.visual === 'quake' ? { type: 'quake' } : { type: 'swing', ink: a.ink, step: a.step });
     const c = shapeCenter(a);
     this.traces.push(this.traceFor(m, a.ink, a.step, c.x, c.y, a.aim, a.dir, a.potency, a.speed, a.seed));
@@ -920,6 +1036,10 @@ export class Game {
         pr.dead = true;
         this.splash(pr.x, pr.y, 9, inkColor(pr.ink), 6);
         this.text(pr.x, pr.y - 16, '破', a.ink ? INKS[a.ink].edge : INK, 15);
+        if (this.has('bronze-mirror')) {
+          // 거울에 비친 먹덩이가 되돌아간다
+          this.fireProjectile('glob', pr.x, pr.y, -pr.vx * 1.4, -pr.vy * 1.4, { r: pr.r * 1.2, life: 2.5, dmg: 16, knock: 160, ink: a.ink, potency: a.potency });
+        }
       }
     }
   }
@@ -927,13 +1047,21 @@ export class Game {
   private applyMoveHit(a: Action, e: Enemy): void {
     const m: Move = a.move;
     let dmg = BASE_DAMAGE * m.damage * (1 + 0.6 * a.potency);
-    const crit = Math.random() < critChance(a.ink, a.potency);
-    if (crit) dmg *= 2;
+    const crit = this.rollCrit(a.ink, a.potency);
+    if (crit) dmg *= this.critMult();
     const c = shapeCenter(a);
     const ang = Math.atan2(e.y - c.y, e.x - c.x);
     const k = m.knock / e.mass;
     this.damageEnemy(e, dmg, a.ink, { kx: Math.cos(ang) * k, ky: Math.sin(ang) * k, crit });
     if (m.hitstop) this.hitstop = Math.max(this.hitstop, m.hitstop);
+    if (a.step === 2 && !e.dead) {
+      if (this.has('cinnabar-brush')) {
+        e.burnStacks = Math.min(4, e.burnStacks + 1);
+        e.burnT = 3;
+        e.burnPower = Math.max(e.burnPower, 4);
+      }
+      if (this.has('paperweight')) e.stunT = Math.max(e.stunT, 0.5);
+    }
     m.onHit?.(this, a, e);
   }
 
@@ -1128,10 +1256,10 @@ export class Game {
         if (!this.hittable(e) || p.pierce.has(e.id)) continue;
         if (this.bodyCircles(e).some((c) => Math.hypot(c.x - p.x, c.y - p.y) < c.r + p.r)) {
           p.pierce.add(e.id);
-          const crit = Math.random() < critChance(p.ink, p.potency);
+          const crit = this.rollCrit(p.ink, p.potency);
           const a = Math.atan2(p.vy, p.vx);
           const k = p.knock / e.mass;
-          this.damageEnemy(e, p.dmg * (crit ? 2 : 1), p.ink, { kx: Math.cos(a) * k, ky: Math.sin(a) * k, crit });
+          this.damageEnemy(e, p.dmg * (crit ? this.critMult() : 1), p.ink, { kx: Math.cos(a) * k, ky: Math.sin(a) * k, crit });
           if (p.kind === 'wave') e.slowT = Math.max(e.slowT, 2);
         }
       }
@@ -1188,8 +1316,9 @@ export class Game {
       const dx = pl.x - pk.x;
       const dy = pl.y - 10 - pk.y;
       const d = Math.hypot(dx, dy) || 1;
-      if (d < PICKUP_MAGNET) {
-        const pull = 900 * (1 - d / PICKUP_MAGNET) + 120;
+      const magnet = PICKUP_MAGNET * (this.has('well') ? 3 : 1);
+      if (d < magnet) {
+        const pull = 900 * (1 - d / magnet) + 120;
         pk.vx += (dx / d) * pull * dt;
         pk.vy += (dy / d) * pull * dt;
       }
@@ -1200,6 +1329,7 @@ export class Game {
         pk.dead = true;
         this.sounds.push({ type: 'pickup', ink: pk.ink });
         this.ink.apply({ [pk.ink]: pk.amount });
+        if (this.has('jar')) this.healPlayer(2);
         this.text(pl.x + rand(-10, 10), pl.y - 52, `${INKS[pk.ink].hanja} +${pk.amount}`, INKS[pk.ink].edge, 17);
         for (let i = 0; i < 5; i++) {
           this.addParticle(pk.x, pk.y, rand(-60, 60), rand(-90, -20), rand(1.5, 3), inkColor(pk.ink), 0.8, rand(0.3, 0.5), false);
@@ -1222,8 +1352,12 @@ export class Game {
     o: { kx?: number; ky?: number; crit?: boolean; quiet?: boolean } = {},
   ): void {
     if (e.dead) return;
-    const mult = affinity(ink, e.el);
-    const dmg = amount * mult;
+    const ex = this.ink.excess;
+    const mult = affinity(ink, e.el, ink !== null && ink === ex);
+    let bonus = 1;
+    if (this.has('white-porcelain') && this.player.hp >= this.player.maxHp - 0.5) bonus *= 1.25;
+    if (this.has('overflow-cup') && ex) bonus *= 1.2;
+    const dmg = amount * mult * bonus;
     e.hp -= dmg;
     if (!o.quiet) e.hitT = 0.14;
     e.kx += o.kx ?? 0;
@@ -1326,7 +1460,51 @@ export class Game {
     const big = e.kind === 'brute' || e.kind === 'tiger';
     this.hitstop = Math.max(this.hitstop, big ? 0.09 : 0.02);
     this.shake = Math.max(this.shake, big ? 10 : 3);
-    if (e.burnStacks > 0 && ink !== null) this.explode(e.x, e.y, 46 + 10 * e.burnStacks, e.burnPower * 1.6 + 4, e.id);
+    if (e.burnStacks > 0 && ink !== null) {
+      const big2 = this.has('brazier') ? 1.5 : 1;
+      this.explode(e.x, e.y, (46 + 10 * e.burnStacks) * big2, (e.burnPower * 1.6 + 4) * big2, e.id);
+    }
+    if (this.has('vine-knot')) this.vineKnot(e);
+  }
+
+  /** 덩굴 매듭 — 쓰러진 자리에서 가장 가까운 먹귀를 묶는다 */
+  private vineKnot(from: Enemy): void {
+    let best: Enemy | null = null;
+    let bd = 260;
+    for (const o of this.enemies) {
+      if (o === from || !this.hittable(o)) continue;
+      const d = Math.hypot(o.x - from.x, o.y - from.y);
+      if (d < bd) {
+        bd = d;
+        best = o;
+      }
+    }
+    if (!best) return;
+    best.rootT = Math.max(best.rootT, 1);
+    const col = INKS.cheong.color;
+    this.addRing('spawn', best.x, best.y, best.r * 0.5, best.r * 1.8, 0.5, 3, col);
+    for (let i = 0; i < 6; i++) {
+      const k = i / 5;
+      this.addParticle(from.x + (best.x - from.x) * k, from.y + (best.y - from.y) * k - 10, rand(-15, 15), rand(-15, 15), rand(1.5, 2.5), col, 0.8, rand(0.3, 0.5), false);
+    }
+  }
+
+  /** 치명타가 나는지 — 은장도가 날을 세운다 */
+  private rollCrit(ink: InkId | null, potency: number): boolean {
+    return Math.random() < critChance(ink, potency) + (this.has('silver-knife') ? 0.1 : 0);
+  }
+
+  private critMult(): number {
+    return this.has('seal-paste') ? 2.6 : 2;
+  }
+
+  /** 넘친 赤 먹이 붓잡이의 손을 태운다 — 무적과 상관없이, 쓰러지지는 않게 */
+  private selfBurn(n: number): void {
+    const pl = this.player;
+    if (pl.hp <= 1) return;
+    pl.hp = Math.max(1, pl.hp - n);
+    this.text(pl.x + rand(-8, 8), pl.y - 60, `-${n}`, INKS.jeok.edge, 15);
+    for (let i = 0; i < 4; i++) this.addParticle(pl.x + rand(-8, 8), pl.y - 22, rand(-30, 30), rand(-60, -20), rand(1.5, 2.5), INKS.jeok.color, 0.9, rand(0.3, 0.5), false, 50);
   }
 
   /** 불붙은 먹귀가 터진다 — 주변에 불을 옮긴다 */
@@ -1357,9 +1535,12 @@ export class Game {
   hurtPlayer(dmg: number, el: InkId | null): boolean {
     const pl = this.player;
     if (pl.invuln > 0 || pl.dashT > 0 || this.phase !== 'play') return false;
+    if (this.ink.excess === 'baek') dmg *= 1.25;
+    if (this.has('clay-inkstone')) dmg *= 0.85;
+    if (this.has('night-rain') && pl.hp < pl.maxHp / 3) dmg *= 0.65;
     pl.hp -= dmg;
     this.sounds.push({ type: 'hurt' });
-    pl.invuln = 0.75;
+    pl.invuln = 0.75 + (this.has('folding-screen') ? 0.4 : 0);
     pl.hurtT = 0.3;
     this.hurtFlash = 1;
     this.shake = Math.max(this.shake, 9);

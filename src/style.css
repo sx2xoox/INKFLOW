@@ -198,17 +198,139 @@ kbd {
 }
 
 .inkbar .track {
-  width: 74px;
+  width: 84px;
   height: 7px;
   background: rgba(96, 91, 84, 0.18);
   border-radius: 4px;
   overflow: hidden;
 }
 
+.inkbar .track {
+  position: relative;
+  display: flex;
+}
+
 .inkbar .fill {
   display: block;
   height: 100%;
-  border-radius: 4px;
+}
+
+.inkbar .fill.lock {
+  border-radius: 4px 0 0 4px;
+}
+
+.inkbar .fill.wet {
+  border-radius: 0 4px 4px 0;
+}
+
+/* 태과 문턱 */
+.inkbar .mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1.5px;
+  background: rgba(178, 42, 34, 0.55);
+}
+
+.inkbar.ex .h {
+  color: var(--seal) !important;
+}
+
+.inkbar .v small {
+  margin-left: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+.owned {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin: -8px 0 16px;
+  font-size: 13px;
+}
+
+.owned .label {
+  color: var(--ink-soft);
+  margin-right: 4px;
+}
+
+.owned .item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid rgba(26, 23, 21, 0.25);
+  background: rgba(250, 246, 236, 0.6);
+}
+
+.owned .item b {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.owned.full {
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0 0 16px;
+  text-align: left;
+}
+
+.owned.full .item i {
+  font-style: normal;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.card .tag-chip.lock {
+  background: var(--ink);
+}
+
+.card .price {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.card .price .have {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.card.poor {
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  opacity: 0.62;
+}
+
+.card.poor:hover {
+  transform: none;
+}
+
+.card.nope {
+  animation: nope 0.32s ease;
+}
+
+@keyframes nope {
+  20% {
+    transform: translateX(-6px);
+  }
+  50% {
+    transform: translateX(5px);
+  }
+  80% {
+    transform: translateX(-3px);
+  }
+}
+
+.card .excess {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--seal);
 }
 
 .inkbar .v {

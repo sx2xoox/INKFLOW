@@ -5,7 +5,8 @@ import { Container, Sprite, Texture } from 'pixi.js';
 import { TAU, clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
 import type { Enemy } from '../game/types';
-import { INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
+import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
+import { ARTIFACTS } from '../game/artifacts';
 import { numeral } from '../game/game';
 import { CHAPTER, ROOM_KINDS } from '../game/rooms';
 import { arcPoints } from '../render/brush';
@@ -22,6 +23,8 @@ export class Hud {
   private readonly strokes = new StrokeBatch(12000);
   /** 글자와 그림 — 붓질 위에 */
   private readonly labels = new Container();
+  /** 그림 위에 다시 긋는 가는 획 (벼루의 태과 문턱) */
+  private readonly topStrokes = new StrokeBatch(2000);
   /** 문을 지날 때 화면을 덮는 먹 — 맨 위 */
   private readonly wipe = new Container();
   private readonly wipeFill = new Sprite(Texture.WHITE);
@@ -43,7 +46,7 @@ export class Hud {
     private readonly atlas: Atlas,
     private readonly text: TextCache,
   ) {
-    layer.addChild(this.strokes.mesh, this.labels, this.wipe);
+    layer.addChild(this.strokes.mesh, this.labels, this.topStrokes.mesh, this.wipe);
     this.wipeFill.tint = 0x1a1715;
     this.wipeGlyph.anchor.set(0.5);
     this.wipe.addChild(this.wipeFill, this.wipeStrokes.mesh, this.wipeGlyph);
@@ -103,17 +106,20 @@ export class Hud {
     this.h = h;
     this.used = 0;
     this.strokes.begin();
+    this.topStrokes.begin();
     const show = g.phase === 'play' || g.phase === 'over';
     if (show) {
       this.vitality(g);
       this.combo(g);
       this.waveInfo(g);
       this.wells(g);
+      this.belongings(g);
     }
     this.banner(g);
     this.switchFx(g);
     this.transition(g);
     this.strokes.end();
+    this.topStrokes.end();
     for (let i = this.used; i < this.sprites.length; i++) this.sprites[i].visible = false;
   }
 
@@ -223,6 +229,8 @@ export class Hud {
         this.label(left > 0 ? `먹귀 ${g.enemies.length} · 남은 무리 ${left}` : `남은 먹귀 ${g.enemies.length}`, w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
       } else if (g.roomPhase === 'spring') {
         this.label('샘에 다가가 먹을 씻는다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
+      } else if (g.roomPhase === 'shop') {
+        this.label('서안에 다가가 물건을 본다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
       } else if (g.roomPhase === 'open') {
         this.label('문을 골라 지나간다', w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
       }
@@ -352,26 +360,56 @@ export class Hud {
     this.wipeStrokes.end();
   }
 
-  /* 다섯 벼루 */
+  /* 다섯 벼루 — 가운데 짙은 것이 굳은 먹, 둘레의 윤기 나는 것이 젖은 먹. 붉은 고리가 태과 문턱 */
   private wells(g: Game): void {
     const n = INK_ORDER.length;
     const gap = 76;
     const x0 = this.w / 2 - ((n - 1) * gap) / 2;
     const y = this.h - 58;
     const t = g.time;
+    const rOf = (v: number): number => 4 + 13 * Math.sqrt(v / INK_MAX);
     INK_ORDER.forEach((id, i) => {
       const x = x0 + i * gap;
       const v = g.ink.values[id];
+      const lk = g.ink.locked[id];
       const d = INKS[id];
       const dom = g.ink.dominant === id;
+      const ex = g.ink.excess === id;
+      if (ex) {
+        // 넘친 먹이 벼루 둘레로 번진다
+        const pulse = 1 + 0.08 * Math.sin(t * 6 + i);
+        this.frame(`wash/${i % 4}`, x, y + 2, (0.95 * pulse * 30) / 30, d.color, 0.55);
+      }
       this.frame('well', x, y, 0.82, null, 0.95);
       if (v > 0) {
-        const r = 4 + 15 * Math.sqrt(v / INK_MAX);
-        this.frame(`blob/${i}`, x, y, r / BLOB_R, d.color, 0.95);
+        // 젖은 먹은 옅고 윤기 있게, 굳은 먹은 가운데에 짙게
+        const wet = mix(d.color, PAPER_LIGHT, id === 'baek' ? 0 : 0.22);
+        this.frame(`blob/${i}`, x, y, rOf(v) / BLOB_R, wet, 0.95);
+        if (v - lk > 0.5) this.frame(`blob/${(i + 3) % 6}`, x - rOf(v) * 0.34, y - rOf(v) * 0.36, (rOf(v) * 0.2) / BLOB_R, PAPER_LIGHT, 0.5);
+      }
+      if (lk > 0) this.frame(`blob/${(i + 1) % 6}`, x, y, rOf(lk) / BLOB_R, mix(d.color, INK, id === 'baek' ? 0.45 : 0.3), 1);
+      // 태과 문턱 — 이 고리를 넘으면 넘친다
+      const rx = rOf(EXCESS_AT) + 1.5;
+      this.topStrokes.stroke(arcPoints(x, y, rx, i * 1.3, TAU * 0.96, 26, rx), {
+        width: ex ? 2 : 1.2,
+        color: SEAL,
+        alpha: ex ? 0.9 : v > EXCESS_AT * 0.55 ? 0.5 : 0.18,
+        dryness: 0.55,
+        taperIn: 0.1,
+        taperOut: 0.1,
+        seed: 300 + i,
+      });
+      if (ex) {
+        // 벼루 가장자리에서 먹이 흘러내린다
+        for (let k = 0; k < 2; k++) {
+          const ph = (t * 0.7 + k * 0.5 + i * 0.13) % 1;
+          const sx = x + (k ? 17 : -17);
+          this.frame(`blob/${(k + i) % 6}`, sx + (k ? 3 : -3) * ph, y + 10 + ph * 18, (4.4 * (1 - ph * 0.45)) / BLOB_R, d.color, 0.95 * (1 - ph * ph));
+        }
       }
       const labelCol = id === 'baek' ? ([110, 106, 98] as RGB) : d.edge;
       this.label(d.hanja, x, y - 38, { size: dom ? 20 : 16, color: labelCol, halo: 2.4, weight: 900 }, 0.5, 0.5, dom ? 1 : 0.75);
-      this.label(`${Math.round(v)}`, x, y + 34, { size: 13, color: INK, halo: 2, weight: 700 }, 0.5, 0.5, v > 0 ? 0.85 : 0.4);
+      this.label(`${Math.round(v)}`, x, y + 34, { size: 13, color: ex ? SEAL : INK, halo: 2, weight: 700 }, 0.5, 0.5, v > 0 ? 0.85 : 0.4);
       if (dom) {
         this.strokes.stroke(arcPoints(x, y, 30, t * 0.8 + i, TAU * 0.9, 30, 31), {
           width: 4.5,
@@ -383,6 +421,30 @@ export class Hud {
           seed: 60 + i,
         });
       }
+    });
+    // 태과 — 무엇을 얻고 무엇을 치르는지
+    const ex = g.ink.excess;
+    if (ex) {
+      const c = EXCESS_COST[ex];
+      const pulse = 0.8 + 0.2 * Math.sin(t * 5);
+      this.label(`太過 · 상극 ×1.8 · 약점 없음 — ${c.title}: ${c.cost}`, this.w / 2, y - 66, { size: 14, color: SEAL, halo: 2.4, weight: 900 }, 0.5, 0.5, pulse);
+    }
+  }
+
+  /* 지닌 물건 — 왼쪽 아래에 인장처럼 */
+  private belongings(g: Game): void {
+    const list = g.artifactOrder;
+    if (!list.length) return;
+    const m = 26;
+    const size = 26;
+    const y = this.h - m - size / 2;
+    this.label('지닌 물건', m, y - size + 2, { size: 12, color: DAMMUK, halo: 2, weight: 700 }, 0, 0.5);
+    list.forEach((id, i) => {
+      const a = ARTIFACTS[id];
+      const x = m + size / 2 + i * (size + 6);
+      const col = a.ink === 'baek' ? ([150, 146, 138] as RGB) : INKS[a.ink].color;
+      this.strokes.stroke([{ x: x - size / 2 + 2, y }, { x: x + size / 2 - 2, y: y - 0.5 }], { width: size - 2, color: col, alpha: 0.9, dryness: 0.2, taperIn: 0, taperOut: 0, seed: 400 + i, wet: 0.2 });
+      this.label(a.glyph, x, y + 0.5, { size: 15, color: a.ink === 'baek' || a.ink === 'hwang' ? INK : PAPER_LIGHT, weight: 900 });
     });
   }
 
