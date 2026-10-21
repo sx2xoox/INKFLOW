@@ -102,7 +102,7 @@ export class Hud {
     this.strokes.stroke([{ x: m, y: m + 16 }, { x: m + 30, y: m + 16 }], { width: 30, color: SEAL, alpha: 0.92, dryness: 0.15, taperIn: 0, taperOut: 0, seed: 1, wet: 0.2 });
     this.label('氣', m + 15, m + 16, { size: 20, color: PAPER_LIGHT, weight: 900 });
     const x0 = m + 44;
-    const len = 230 * (pl.maxHp / 100);
+    const len = Math.min(340, 230 * (pl.maxHp / 100));
     const y = m + 16;
     this.strokes.stroke([{ x: x0, y }, { x: x0 + len * 0.5, y: y - 1.5 }, { x: x0 + len, y }], { width: 15, color: DAMMUK, alpha: 0.16, dryness: 0.7, taperIn: 0.02, taperOut: 0.04, seed: 2 });
     const gh = clamp(this.ghostHp / pl.maxHp, 0, 1);

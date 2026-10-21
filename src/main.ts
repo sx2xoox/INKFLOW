@@ -3,7 +3,8 @@ import { Sound } from './audio';
 import { TAU } from './core/math';
 import { Game, type InputFrame } from './game/game';
 import { View } from './gfx/view';
-import { INK_ORDER } from './ink';
+import { INK_ORDER, inkName } from './ink';
+import { CHARACTERS } from './game/characters';
 import { Input } from './input';
 import { UI } from './ui';
 import { setupGallery } from './gallery';
@@ -15,9 +16,30 @@ const DEMO = params.has('demo');
 /** 그림 점검용 진열장 */
 const GALLERY = params.get('gallery');
 
+/**
+ * 웹 글꼴은 글자 묶음별로 나눠 받는다. 캔버스에 쓸 글자를 미리 알려 줘야
+ * 처음 쓰는 순간 다른 글꼴로 그려지지 않는다.
+ */
+function canvasGlyphs(): string {
+  const words = [
+    '墨流五色靑赤黃白黑淡氣一二三破木火土金水剋生',
+    '첫째둘째셋째넷째다섯째여섯째일곱째여덟째아홉째열째번째 물결',
+    '먹귀가 몰려온다 물결을 넘기다 먹이 마르기 전에 다음 먹을 고르라',
+    '먹귀의 기운 유리한 먹 남은 먹귀 붓잡이 0123456789+-!·「」—',
+  ];
+  for (const c of CHARACTERS) {
+    words.push(c.name);
+    for (const ink of [null, ...INK_ORDER]) {
+      words.push(c.styleName(ink), inkName(ink));
+      for (const m of c.combo(ink)) words.push(m.name);
+    }
+  }
+  return [...new Set(words.join(''))].join('');
+}
+
 async function loadFonts(): Promise<void> {
-  const want = ['900 40px "Noto Serif KR"', '700 40px "Noto Serif KR"', '400 40px "Nanum Brush Script"'];
-  const sample = '墨流靑赤黃白黑淡氣一二三 먹의 흐름 물결 0123456789';
+  const want = ['900 40px "Noto Serif KR"', '700 40px "Noto Serif KR"', '600 40px "Noto Serif KR"', '400 40px "Nanum Brush Script"'];
+  const sample = canvasGlyphs();
   await Promise.race([Promise.all(want.map((f) => document.fonts.load(f, sample))), new Promise((r) => setTimeout(r, 4000))]);
 }
 

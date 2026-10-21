@@ -291,7 +291,7 @@ export class Game {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.life <= 0 && p.stain) {
-        this.stamps.push({ kind: 'blob', x: p.x, y: p.y, r: p.r * 0.9, color: p.color, alpha: 0.35 * p.alpha, seed: p.seed, rot: 0, wet: 0.3 });
+        this.stamps.push({ kind: 'blob', x: p.x, y: p.y, r: p.r * 0.9, color: p.color, alpha: 0.25 * p.alpha, seed: p.seed, rot: 0, wet: 0.3 });
       }
     }
     this.particles = this.particles.filter((p) => p.life > 0);
@@ -573,7 +573,7 @@ export class Game {
       if (inShape(a, prog, pr.x, pr.y, pr.r + 4)) {
         pr.dead = true;
         this.splash(pr.x, pr.y, 9, inkColor(pr.ink), 6);
-        this.text(pr.x, pr.y - 16, '破', inkColor(a.ink), 18);
+        this.text(pr.x, pr.y - 16, '破', a.ink ? INKS[a.ink].edge : INK, 15);
       }
     }
   }
@@ -879,7 +879,7 @@ export class Game {
     this.kills++;
     this.sounds.push({ type: 'kill', big: e.kind === 'brute' });
     const col = inkColor(e.el);
-    this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: e.r * 1.5, color: col, alpha: 0.6, seed: e.seed, rot: Math.random() * TAU, wet: 1 });
+    this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: e.r * 1.5, color: col, alpha: 0.5, seed: e.seed, rot: Math.random() * TAU, wet: 1 });
     this.addRing('burst', e.x, e.y - e.r * 0.4, e.r * 0.6, e.r * 2.6, 0.4, e.r * 0.35, col);
     const n = 8 + Math.floor(e.r / 2);
     for (let i = 0; i < n; i++) {
