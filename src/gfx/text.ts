@@ -16,28 +16,40 @@ export interface TextStyle {
   /** 종이색 테두리 — 먹 위에서도 읽히게 */
   halo?: number;
   alpha?: number;
+  /** 화면 픽셀 대비 굽는 배율. 화면에 1:1로 찍히게 맞추면 글자가 또렷하다 */
+  res?: number;
 }
 
-const RES = 2;
+export const DEFAULT_RES = 2;
+
+/** 화면 배율에 맞춘 굽기 배율 — 너무 자주 바뀌지 않게 0.25 단위로 */
+export const textRes = (screenScale: number): number => Math.min(4, Math.max(1, Math.round(screenScale * 4) / 4));
 
 export class TextCache {
   private cache = new Map<string, Texture>();
+  /** 이번 프레임에 아직 쓰일 수 있는 글자는 한 차례 미뤘다가 버린다 */
+  private stale: Texture[] = [];
 
   get(text: string, s: TextStyle): Texture {
-    const key = `${text}|${s.size}|${s.color.join(',')}|${s.font ?? ''}|${s.weight ?? 900}|${s.halo ?? 0}`;
+    const key = `${text}|${s.size}|${s.color.join(',')}|${s.font ?? ''}|${s.weight ?? 900}|${s.halo ?? 0}|${s.res ?? DEFAULT_RES}`;
     const hit = this.cache.get(key);
     if (hit) return hit;
-    if (this.cache.size > 700) {
-      for (const t of this.cache.values()) t.destroy(true);
-      this.cache.clear();
-    }
+    if (this.cache.size > 700) this.clear();
     const tex = Texture.from(renderText(text, s), true);
     this.cache.set(key, tex);
     return tex;
   }
+
+  /** 글꼴이 늦게 도착했으면 다른 글꼴로 구운 글자를 버린다 */
+  clear(): void {
+    for (const t of this.stale) t.destroy(true);
+    this.stale = [...this.cache.values()];
+    this.cache.clear();
+  }
 }
 
 export function renderText(text: string, s: TextStyle): HTMLCanvasElement {
+  const RES = s.res ?? DEFAULT_RES;
   const font = `${s.weight ?? 900} ${s.size * RES}px ${s.font ?? SERIF}`;
   const c = document.createElement('canvas');
   const m = c.getContext('2d')!;
@@ -54,17 +66,16 @@ export function renderText(text: string, s: TextStyle): HTMLCanvasElement {
   const x = w / 2;
   const y = h / 2 + s.size * RES * 0.04;
   if (halo > 0) {
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = halo * 2;
-    ctx.strokeStyle = rgba(PAPER_LIGHT, 0.85);
-    ctx.strokeText(text, x, y);
+    // 글자 획을 두껍게 하지 않도록 테두리 대신 부드러운 종이빛 번짐을 깐다
+    ctx.save();
+    ctx.shadowColor = rgba(PAPER_LIGHT, 1);
+    ctx.shadowBlur = halo * 1.6;
+    ctx.fillStyle = rgba(PAPER_LIGHT, 0.9);
+    ctx.fillText(text, x, y);
+    ctx.fillText(text, x, y);
+    ctx.restore();
   }
   ctx.fillStyle = rgba(s.color, s.alpha ?? 1);
   ctx.fillText(text, x, y);
-  // 붓이 지나간 듯 살짝 번진 둘째 겹
-  ctx.globalAlpha = 0.18;
-  ctx.fillText(text, x + 0.8 * RES, y + 0.6 * RES);
   return c;
 }
-
-export const TEXT_RES = RES;

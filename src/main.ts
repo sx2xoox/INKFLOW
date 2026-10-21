@@ -1,3 +1,9 @@
+// 글꼴은 외부 서버가 아니라 게임과 함께 내려준다
+import '@fontsource/noto-serif-kr/400.css';
+import '@fontsource/noto-serif-kr/600.css';
+import '@fontsource/noto-serif-kr/700.css';
+import '@fontsource/noto-serif-kr/900.css';
+import '@fontsource/nanum-brush-script/400.css';
 import { Application } from 'pixi.js';
 import { Sound } from './audio';
 import { TAU } from './core/math';
@@ -37,10 +43,14 @@ function canvasGlyphs(): string {
   return [...new Set(words.join(''))].join('');
 }
 
+const FACES = ['400 40px "Noto Serif KR"', '600 40px "Noto Serif KR"', '700 40px "Noto Serif KR"', '900 40px "Noto Serif KR"', '400 40px "Nanum Brush Script"'];
+
 async function loadFonts(): Promise<void> {
-  const want = ['900 40px "Noto Serif KR"', '700 40px "Noto Serif KR"', '600 40px "Noto Serif KR"', '400 40px "Nanum Brush Script"'];
   const sample = canvasGlyphs();
-  await Promise.race([Promise.all(want.map((f) => document.fonts.load(f, sample))), new Promise((r) => setTimeout(r, 4000))]);
+  const all = Promise.all(FACES.map((f) => document.fonts.load(f, sample)));
+  await Promise.race([all, new Promise((r) => setTimeout(r, 10000))]);
+  const missing = FACES.filter((f) => !document.fonts.check(f, sample));
+  if (missing.length) console.warn('글꼴을 다 받지 못했다:', missing);
 }
 
 async function boot(): Promise<void> {
@@ -65,6 +75,8 @@ async function boot(): Promise<void> {
   host.appendChild(app.canvas);
 
   const view = new View(app);
+  // 늦게 도착한 글꼴 조각이 있으면 구워 둔 글자를 새로 굽는다
+  document.fonts.addEventListener('loadingdone', () => view.text.clear());
   const game = new Game();
   const input = new Input(app.canvas);
   const ui = new UI(game, document.body);

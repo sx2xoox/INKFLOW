@@ -10,7 +10,7 @@ import { type RGB, DAMMUK, INK, PAPER_LIGHT, SEAL, mix } from '../render/color';
 import { BAKE, type Atlas } from './atlas';
 import { BLOB_R } from './assets';
 import { StrokeBatch } from './strokes';
-import { BRUSH_FONT, TEXT_RES, type TextCache, type TextStyle } from './text';
+import { BRUSH_FONT, type TextCache, type TextStyle, textRes } from './text';
 
 const toHex = (c: readonly number[]): number => ((c[0] & 255) << 16) | ((c[1] & 255) << 8) | (c[2] & 255);
 const NUM = ['一', '二', '三'];
@@ -23,6 +23,8 @@ export class Hud {
   private ghostHp = 100;
   private w = 1280;
   private h = 760;
+  /** 화면 표시 글자는 기기 픽셀에 1:1로 굽는다 */
+  res = 2;
 
   constructor(
     private readonly layer: Container,
@@ -54,10 +56,17 @@ export class Hud {
 
   private label(str: string, x: number, y: number, st: TextStyle, ax = 0.5, ay = 0.5, alpha = 1, scale = 1): Sprite {
     const s = this.sprite();
-    s.texture = this.text.get(str, st);
+    // 크게 키워 보여 줄 글자는 그만큼 크게 굽는다
+    const res = textRes(this.res * Math.max(1, scale));
+    s.texture = this.text.get(str, { ...st, res });
     s.anchor.set(ax, ay);
-    s.scale.set(scale / TEXT_RES);
-    s.position.set(x, y);
+    s.scale.set(scale / res);
+    // 기기 픽셀에 맞춰 놓아야 작은 글자가 흐려지지 않는다
+    const tw = s.texture.width;
+    const th = s.texture.height;
+    const left = x - tw * ax * (scale / res);
+    const top = y - th * ay * (scale / res);
+    s.position.set(x + (Math.round(left * this.res) / this.res - left), y + (Math.round(top * this.res) / this.res - top));
     s.alpha = alpha;
     return s;
   }
@@ -131,7 +140,7 @@ export class Hud {
     const col = inkColor(ink);
     const edge = ink === 'baek' ? ([96, 92, 86] as RGB) : inkEdge(ink);
     this.label(`${g.character.name} · ${inkName(ink)}`, m, m + 52, { size: 15, color: INK, halo: 2.2, weight: 700 }, 0, 0.5);
-    this.label(`「${g.styleName}」`, m + 132, m + 52, { size: 15, color: edge, halo: 2.2, weight: 900 }, 0, 0.5);
+    this.label(`「${g.styleName}」`, m + 132, m + 52, { size: 15, color: edge, halo: 2.2, weight: 700 }, 0, 0.5);
 
     const moves = g.comboMoves;
     const cur = g.comboCursor;
@@ -142,9 +151,6 @@ export class Hud {
       const y = m + 86;
       const active = cur.current === i;
       const next = !active && chaining && cur.next === i;
-      if (i > 0) {
-        this.strokes.stroke([{ x: x - 100, y }, { x: x - 18, y }], { width: 2, color: DAMMUK, alpha: 0.35, dryness: 0.6, taperIn: 0.1, taperOut: 0.6, seed: 20 + i });
-      }
       if (active) {
         this.frame(`blob/${i}`, x, y, 14 / BLOB_R, col, 0.95);
       }
@@ -159,7 +165,7 @@ export class Hud {
       });
       const numCol: RGB = active ? (ink === 'baek' ? INK : PAPER_LIGHT) : next ? edge : DAMMUK;
       this.label(NUM[i], x, y + 0.5, { size: 13, color: numCol, weight: 900 });
-      this.label(moves[i].name, x + 19, y, { size: 14, color: active ? edge : next ? INK : DAMMUK, halo: 2, weight: active ? 900 : 600 }, 0, 0.5, active || next ? 1 : 0.75);
+      this.label(moves[i].name, x + 19, y, { size: 14, color: active ? edge : next ? INK : DAMMUK, halo: 2, weight: active ? 700 : 600 }, 0, 0.5, active || next ? 1 : 0.8);
     }
   }
 

@@ -17,7 +17,7 @@ import { drawDashTrail, drawPlayerGear, drawProjectile, drawRing, drawSash, draw
 import { Hud } from './hud';
 import { InkSim } from './inksim';
 import { StrokeBatch } from './strokes';
-import { TEXT_RES, TextCache } from './text';
+import { TextCache, textRes } from './text';
 
 const toHex = (c: readonly number[]): number => ((c[0] & 255) << 16) | ((c[1] & 255) << 8) | (c[2] & 255);
 
@@ -61,6 +61,8 @@ export class View {
   private readonly ground = new Container();
   private readonly entities = new Container();
   private readonly fxLayer = new Container();
+  /** 피해 숫자 같은 글자 — 먹 합성을 거치지 않아 또렷하다 */
+  private readonly overlay = new Container();
   private readonly textLayer = new Container();
   readonly hudLayer = new Container();
 
@@ -102,12 +104,13 @@ export class View {
     this.inkRT = RenderTexture.create({ width, height, resolution: res });
     this.compositor = new Compositor(this.inkRT, this.paperTex, WORLD_W, WORLD_H);
     // 글씨가 또렷해야 하는 화면 표시는 합성 위에 바로 그린다
-    app.stage.addChild(this.compositor.mesh, this.hudLayer);
+    app.stage.addChild(this.compositor.mesh, this.overlay, this.hudLayer);
+    this.overlay.addChild(this.textLayer);
 
     this.stains = new InkSim(app.renderer, this.atlas, WORLD_W, WORLD_H);
 
     this.inkScene.addChild(this.world);
-    this.world.addChild(this.stains.sprite, this.ground, this.groundStrokes.mesh, this.entities, this.fxLayer, this.textLayer);
+    this.world.addChild(this.stains.sprite, this.ground, this.groundStrokes.mesh, this.entities, this.fxLayer);
     this.fxLayer.addChild(this.fxStrokes.mesh);
     this.entities.sortableChildren = true;
 
@@ -181,6 +184,7 @@ export class View {
     this.drawEntities(g, dt);
     this.drawFx(g);
     this.drawTexts(g);
+    this.hud.res = this.app.renderer.resolution;
     this.hud.update(g, width, height);
 
     const shakeX = g.shake > 0 ? (Math.random() - 0.5) * g.shake : 0;
@@ -193,6 +197,8 @@ export class View {
     const vy = cyw - height / zoom / 2 + shakeY / zoom;
     this.world.scale.set(zoom);
     this.world.position.set(-vx * zoom, -vy * zoom);
+    this.overlay.scale.set(zoom);
+    this.overlay.position.set(-vx * zoom, -vy * zoom);
 
     this.app.renderer.render({ container: this.inkScene, target: this.inkRT, clear: true, clearColor: [0, 0, 0, 0] });
     this.compositor.update(vx, vy, width / zoom, height / zoom, zoom * this.app.renderer.resolution, g.time, g.hurtFlash);
@@ -461,11 +467,12 @@ export class View {
     this.textPool.begin();
     for (const ft of g.texts) {
       const s = this.textPool.next();
-      s.texture = this.text.get(ft.text, { size: Math.round(ft.size), color: ft.color, halo: 2.4 });
+      const res = textRes(this.app.renderer.resolution * this.scale * 1.15);
+      s.texture = this.text.get(ft.text, { size: Math.round(ft.size), color: ft.color, halo: 2.4, res });
       s.anchor.set(0.5);
       const age = 1 - ft.life / ft.maxLife;
       const pop = age < 0.12 ? 0.6 + (age / 0.12) * 0.55 : 1.15 - Math.min(0.15, (age - 0.12) * 0.6);
-      s.scale.set(pop / TEXT_RES);
+      s.scale.set(pop / res);
       s.position.set(ft.x, ft.y);
       s.alpha = Math.min(1, (ft.life / ft.maxLife) * 3);
     }
