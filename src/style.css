@@ -1,0 +1,424 @@
+:root {
+  --ink: #1a1715;
+  --ink-soft: rgba(26, 23, 21, 0.72);
+  --dammuk: #605b54;
+  --paper-c: #f0e8d6;
+  --seal: #b22a22;
+  --serif: 'Noto Serif KR', 'Nanum Myeongjo', serif;
+  --brush: 'Nanum Brush Script', 'Noto Serif KR', cursive;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #2b3038;
+  font-family: var(--serif);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+canvas {
+  display: block;
+}
+
+/* ───────── 겹쳐 뜨는 화면 ───────── */
+
+.ui {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  z-index: 10;
+  background: radial-gradient(ellipse at center, rgba(240, 232, 214, 0.55), rgba(220, 208, 184, 0.8));
+  backdrop-filter: blur(1.5px);
+  animation: ui-in 0.45s ease-out;
+  overflow-y: auto;
+}
+
+.ui > * {
+  margin: auto;
+}
+
+.ui.hidden {
+  display: none;
+}
+
+.ui.title-screen {
+  background: radial-gradient(ellipse at center, rgba(244, 238, 224, 0.82) 30%, rgba(226, 214, 190, 0.55) 100%);
+  backdrop-filter: none;
+}
+
+@keyframes ui-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.brush {
+  font-family: var(--brush);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+h2.brush {
+  font-size: 64px;
+  margin: 0 0 6px;
+  line-height: 1;
+  text-align: center;
+}
+
+.title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 16px;
+}
+
+.title .logo {
+  max-width: 92vw;
+  height: auto;
+}
+
+.title .tag {
+  margin: 0 0 12px;
+  font-size: 17px;
+  color: var(--ink-soft);
+  letter-spacing: 0.08em;
+}
+
+.btn {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--paper-c);
+  background: var(--ink);
+  border: none;
+  padding: 12px 34px 13px;
+  cursor: pointer;
+  border-radius: 2px;
+  letter-spacing: 0.12em;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  transition:
+    transform 0.15s,
+    background 0.15s;
+  clip-path: polygon(1% 8%, 6% 0, 94% 3%, 100% 14%, 99% 90%, 93% 100%, 4% 96%, 0 84%);
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  background: #3a2420;
+}
+
+.btn.big {
+  font-size: 22px;
+  padding: 15px 46px 16px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 6px 26px;
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin-top: 14px;
+}
+
+kbd {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 12px;
+  border: 1px solid rgba(26, 23, 21, 0.45);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-right: 4px;
+  background: rgba(255, 252, 244, 0.6);
+}
+
+/* ───────── 먹 고르기 ───────── */
+
+.reward {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px 30px;
+  max-width: 1200px;
+}
+
+.reward .next {
+  margin: 4px 0 14px;
+  font-size: 16px;
+  text-align: center;
+}
+
+.reward .hint {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.inkbars {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.inkbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.inkbar.dom {
+  opacity: 1;
+}
+
+.inkbar .h {
+  font-weight: 900;
+  font-size: 18px;
+}
+
+.inkbar.dom .h {
+  text-decoration: underline 2px;
+  text-underline-offset: 4px;
+}
+
+.inkbar .track {
+  width: 74px;
+  height: 7px;
+  background: rgba(96, 91, 84, 0.18);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.inkbar .fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.inkbar .v {
+  min-width: 22px;
+  font-weight: 700;
+}
+
+.cards {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.cards.five {
+  gap: 12px;
+}
+
+.cards.five .card {
+  width: 206px;
+}
+
+.cards.five .card .art {
+  transform: scale(0.88);
+  transform-origin: top center;
+  margin-bottom: -14px;
+}
+
+.card {
+  position: relative;
+  width: 236px;
+  padding: 8px 8px 16px;
+  background: var(--paper) center / 420px repeat, var(--paper-c);
+  border: none;
+  font-family: var(--serif);
+  color: var(--ink);
+  text-align: center;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.08),
+    0 10px 24px -12px rgba(40, 30, 20, 0.55),
+    inset 0 0 0 1px rgba(26, 23, 21, 0.18);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+  animation: card-in 0.5s both ease-out;
+}
+
+.card:nth-child(2) {
+  animation-delay: 0.06s;
+}
+.card:nth-child(3) {
+  animation-delay: 0.12s;
+}
+.card:nth-child(4) {
+  animation-delay: 0.18s;
+}
+.card:nth-child(5) {
+  animation-delay: 0.24s;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.card:hover {
+  transform: translateY(-6px) rotate(-0.4deg);
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.08),
+    0 18px 30px -14px rgba(40, 30, 20, 0.65),
+    inset 0 0 0 2px rgba(26, 23, 21, 0.55);
+}
+
+.card .art {
+  display: block;
+  margin: 0 auto;
+}
+
+.card .glyph {
+  position: absolute;
+  top: 74px;
+  left: 0;
+  right: 0;
+  font-size: 46px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow:
+    0 0 6px rgba(250, 246, 236, 0.95),
+    0 0 2px rgba(250, 246, 236, 1);
+}
+
+.card .name {
+  margin-top: 26px;
+  font-size: 19px;
+  font-weight: 900;
+}
+
+.card .desc {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.card .tag-chip {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--paper-c);
+  background: var(--seal);
+  padding: 1px 8px;
+  border-radius: 2px;
+}
+
+.card .dom {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(26, 23, 21, 0.25);
+  font-size: 13px;
+}
+
+.card .dom.changed {
+  font-weight: 700;
+}
+
+.card .moves {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.card .key {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--ink-soft);
+}
+
+/* ───────── 끝 / 멈춤 ───────── */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 34px 48px 36px;
+  background: var(--paper) center / 420px repeat, var(--paper-c);
+  box-shadow:
+    0 20px 40px -20px rgba(30, 20, 10, 0.7),
+    inset 0 0 0 1px rgba(26, 23, 21, 0.2);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, auto));
+  gap: 10px 30px;
+  margin: 6px 0 10px;
+}
+
+.stats div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stats span {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.stats b {
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--serif);
+  font-size: 20px;
+  letter-spacing: 0.2em;
+  color: #e9e1cf;
+}
+
+@media (max-width: 640px) {
+  h2.brush {
+    font-size: 46px;
+  }
+  .card {
+    width: 100%;
+    max-width: 320px;
+  }
+  .controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cards.five .card .moves {
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
