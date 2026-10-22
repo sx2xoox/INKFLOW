@@ -5,9 +5,9 @@ import { Container, Sprite, Texture } from 'pixi.js';
 import { TAU, clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
 import type { Enemy } from '../game/types';
-import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
+import { EXCESS_AT, EXCESS_COST, HOLD_MIN, INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
 import { ARTIFACTS } from '../game/artifacts';
-import { numeral } from '../game/game';
+import { FRESH_MULT, numeral } from '../game/game';
 import { CHAPTERS, roomGlyph, roomTitle } from '../game/rooms';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, PAPER_LIGHT, SEAL, mix } from '../render/color';
@@ -158,7 +158,7 @@ export class Hud {
   /* 먹에 따른 세 획 */
   private combo(g: Game): void {
     const m = 26;
-    const ink = g.ink.dominant;
+    const ink = g.ink.active;
     const col = inkColor(ink);
     const edge = ink === 'baek' ? ([96, 92, 86] as RGB) : inkEdge(ink);
     this.label(`${g.character.name} · ${inkName(ink)}`, m, m + 52, { size: 15, color: INK, halo: 2.2, weight: 700 }, 0, 0.5);
@@ -188,6 +188,10 @@ export class Hud {
       const numCol: RGB = active ? (ink === 'baek' ? INK : PAPER_LIGHT) : next ? edge : DAMMUK;
       this.label(NUM[i], x, y + 0.5, { size: 13, color: numCol, weight: 900 });
       this.label(moves[i].name, x + 19, y, { size: 14, color: active ? edge : next ? INK : DAMMUK, halo: 2, weight: active ? 700 : 600 }, 0, 0.5, active || next ? 1 : 0.8);
+    }
+    // 골라 바꾼 먹의 첫 획
+    if (g.freshT > 0) {
+      this.label(`갈아 쥔 첫 획 ×${FRESH_MULT}`, m + 2, m + 114, { size: 13, color: edge, halo: 2.2, weight: 900 }, 0, 0.5, Math.min(1, g.freshT * 3));
     }
   }
 
@@ -257,7 +261,8 @@ export class Hud {
       this.label(INKS[el].hanja, x, yy, { size: 15, color: el === 'baek' ? INK : PAPER_LIGHT, weight: 900 });
     });
     const counters = themes.map((el) => INK_ORDER.find((id) => OVERCOMES[id] === el)!);
-    const hint = counters.map((c) => INKS[c].hanja).join(' ');
+    // 이기는 먹을 지니고 있으면 바꿔 쥘 키를 함께 적는다
+    const hint = counters.map((c) => INKS[c].hanja + (g.ink.held(c) && g.ink.active !== c ? `(${INK_ORDER.indexOf(c) + 1})` : '')).join(' ');
     this.label(`유리한 먹  ${hint}`, rx, m + 64, { size: 13, color: INK, halo: 2, weight: 700 }, 1, 0.5, 0.8);
   }
 
@@ -383,8 +388,9 @@ export class Hud {
       const v = g.ink.values[id];
       const lk = g.ink.locked[id];
       const d = INKS[id];
-      const dom = g.ink.dominant === id;
-      const ex = g.ink.excess === id;
+      const dom = g.ink.active === id;
+      const ex = g.ink.over[id];
+      const held = g.ink.held(id);
       if (ex) {
         // 넘친 먹이 벼루 둘레로 번진다
         const pulse = 1 + 0.08 * Math.sin(t * 6 + i);
@@ -398,6 +404,11 @@ export class Hud {
         if (v - lk > 0.5) this.frame(`blob/${(i + 3) % 6}`, x - rOf(v) * 0.34, y - rOf(v) * 0.36, (rOf(v) * 0.2) / BLOB_R, PAPER_LIGHT, 0.5);
       }
       if (lk > 0) this.frame(`blob/${(i + 1) % 6}`, x, y, rOf(lk) / BLOB_R, mix(d.color, INK, id === 'baek' ? 0.45 : 0.3), 1);
+      // 아직 쥘 수 없는 먹 — 이만큼은 모아야 붓에 묻힐 수 있다
+      if (!held && v > 0) {
+        const rh = rOf(HOLD_MIN);
+        this.topStrokes.stroke(arcPoints(x, y, rh, i, TAU * 0.96, 18, rh), { width: 1, color: DAMMUK, alpha: 0.55, dryness: 0.6, taperIn: 0.1, taperOut: 0.1, seed: 320 + i });
+      }
       // 태과 문턱 — 이 고리를 넘으면 넘친다
       const rx = rOf(EXCESS_AT) + 1.5;
       this.topStrokes.stroke(arcPoints(x, y, rx, i * 1.3, TAU * 0.96, 26, rx), {
@@ -418,7 +429,9 @@ export class Hud {
         }
       }
       const labelCol = id === 'baek' ? ([110, 106, 98] as RGB) : d.edge;
-      this.label(d.hanja, x, y - 38, { size: dom ? 20 : 16, color: labelCol, halo: 2.4, weight: 900 }, 0.5, 0.5, dom ? 1 : 0.75);
+      this.label(d.hanja, x, y - 38, { size: dom ? 20 : 16, color: labelCol, halo: 2.4, weight: 900 }, 0.5, 0.5, dom ? 1 : held ? 0.8 : 0.35);
+      // 바꿔 쥘 키
+      this.label(`${i + 1}`, x - 21, y - 40, { size: 11, color: dom ? INK : DAMMUK, halo: 2, weight: 700 }, 0.5, 0.5, held ? 0.85 : 0.35);
       this.label(`${Math.round(v)}`, x, y + 34, { size: 13, color: ex ? SEAL : INK, halo: 2, weight: 700 }, 0.5, 0.5, v > 0 ? 0.85 : 0.4);
       if (dom) {
         this.strokes.stroke(arcPoints(x, y, 30, t * 0.8 + i, TAU * 0.9, 30, 31), {
@@ -432,12 +445,19 @@ export class Hud {
         });
       }
     });
-    // 태과 — 무엇을 얻고 무엇을 치르는지
-    const ex = g.ink.excess;
-    if (ex) {
-      const c = EXCESS_COST[ex];
+    // 태과 — 쥔 먹이면 무엇을 얻는지, 넘친 먹마다 무엇을 치르는지
+    const over = INK_ORDER.filter((id) => g.ink.over[id]);
+    if (over.length) {
       const pulse = 0.8 + 0.2 * Math.sin(t * 5);
-      this.label(`太過 · 상극 ×1.8 · 약점 없음 — ${c.title}: ${c.cost}`, this.w / 2, y - 66, { size: 14, color: SEAL, halo: 2.4, weight: 900 }, 0.5, 0.5, pulse);
+      const parts = over.map((id) => {
+        const c = EXCESS_COST[id];
+        return g.ink.active === id ? `${INKS[id].hanja} 상극 ×1.8 · 약점 없음 — ${c.cost}` : `${INKS[id].hanja} ${c.cost}`;
+      });
+      this.label(`太過 · ${parts.join(' / ')}`, this.w / 2, y - 66, { size: 14, color: SEAL, halo: 2.4, weight: 900 }, 0.5, 0.5, pulse);
+    }
+    // 둘 이상 쥘 수 있으면 바꾸는 법을 적어 둔다
+    if (INK_ORDER.filter((id) => g.ink.held(id)).length >= 2) {
+      this.label('Q E · 1–5 · 휠  먹 바꾸기', x0 - 44, y + 2, { size: 12, color: DAMMUK, halo: 2, weight: 700 }, 1, 0.5, 0.85);
     }
   }
 
@@ -481,10 +501,14 @@ export class Hud {
     // 물결 시작 글씨와 겹치지 않게
     if (!s || (g.banner && g.banner.t < 1.8)) return;
     const t = s.t;
-    const a = t < 0.12 ? t / 0.12 : clamp(1 - (t - 0.35) / 1.0, 0, 1);
+    // 골라 바꿀 때는 자주 바꾸니 작고 짧게
+    const hold = s.manual ? 0.2 : 0.35;
+    const fade = s.manual ? 0.45 : 1.0;
+    const a = t < 0.12 ? t / 0.12 : clamp(1 - (t - hold) / fade, 0, 1);
     const col = s.ink ? (s.ink === 'baek' ? mix(INKS.baek.color, INK, 0.5) : INKS[s.ink].color) : DAMMUK;
     const sc = 1 + 0.25 * Math.max(0, 1 - t / 0.25);
-    this.label(s.ink ? INKS[s.ink].hanja : '淡', this.w / 2, this.h * 0.3, { size: 120, color: col, weight: 900, halo: 4 }, 0.5, 0.5, a * 0.75, sc);
-    this.label(`${inkName(s.ink)} — ${g.styleName}`, this.w / 2, this.h * 0.3 + 80, { size: 18, color: INK, halo: 2.4, weight: 700 }, 0.5, 0.5, a);
+    const size = s.manual ? 80 : 120;
+    this.label(s.ink ? INKS[s.ink].hanja : '淡', this.w / 2, this.h * 0.3, { size, color: col, weight: 900, halo: 4 }, 0.5, 0.5, a * 0.75, sc);
+    this.label(`${inkName(s.ink)} — ${g.styleName}`, this.w / 2, this.h * 0.3 + size * 0.66, { size: 18, color: INK, halo: 2.4, weight: 700 }, 0.5, 0.5, a);
   }
 }

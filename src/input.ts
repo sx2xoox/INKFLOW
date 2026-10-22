@@ -35,6 +35,16 @@ export class Input {
       if (e.button === 0) this.mouseDown = false;
     });
     target.addEventListener('contextmenu', (e) => e.preventDefault());
+    // 휠을 굴리면 쥘 수 있는 먹을 돌려 가며 바꾼다
+    target.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        if (Math.abs(e.deltaY) < 1) return;
+        this.pressed.add(e.deltaY > 0 ? 'WheelDown' : 'WheelUp');
+      },
+      { passive: false },
+    );
   }
 
   down(code: string): boolean {
@@ -60,7 +70,11 @@ export class Input {
     const attack = this.mouseDown || this.mouseClicked || this.down('KeyJ') || this.autoAttack;
     const dash = this.hit('Space') || this.hit('ShiftLeft') || this.hit('ShiftRight') || this.hit('MouseRight') || this.hit('KeyK');
     this.mouseClicked = false;
-    return { moveX: mx, moveY: my, aimX: aim.x, aimY: aim.y, attack, dash };
+    // 1–5: 그 먹을 바로 쥔다. Q·E와 휠: 쥘 수 있는 먹을 돌려 가며
+    let ink = -1;
+    for (let i = 0; i < 5; i++) if (this.hit(`Digit${i + 1}`) || this.hit(`Numpad${i + 1}`)) ink = i;
+    const cycle = this.hit('KeyE') || this.hit('WheelDown') ? 1 : this.hit('KeyQ') || this.hit('WheelUp') ? -1 : 0;
+    return { moveX: mx, moveY: my, aimX: aim.x, aimY: aim.y, attack, dash, ink, cycle };
   }
 
   endFrame(): void {

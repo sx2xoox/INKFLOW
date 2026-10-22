@@ -2,7 +2,7 @@ import { josa } from '../core/hangul';
 import { TAU, clamp, dist, rand, randInt, shuffle, weighted } from '../core/math';
 import type { SoundEvent } from '../audio';
 import { randomSeed } from '../core/rng';
-import { EXCESS_COST, INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
+import { EXCESS_COST, HOLD_MIN, INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
 import { type RGB, DAMMUK, INK, SEAL, mix } from '../render/color';
 import { BRUSH_WIELDER, type CharacterDef, critChance } from './characters';
 import { TIGER_BODY, tigerHitCircles, untouchable, updateTiger } from './boss';
@@ -75,6 +75,10 @@ export interface InputFrame {
   aimY: number;
   attack: boolean;
   dash: boolean;
+  /** 고른 먹(INK_ORDER의 몇 번째), 없으면 −1 */
+  ink?: number;
+  /** 쥘 수 있는 먹을 돌려 가며 바꾼다 — 1 다음, −1 앞 */
+  cycle?: number;
 }
 
 interface WaveState {
@@ -96,6 +100,12 @@ export const BELL_R = 230;
 const BELL_CD = 8;
 const BELL_DMG = 16;
 const BRONZE: RGB = [120, 112, 80];
+
+/** 먹을 바꾼 뒤 다시 바꿀 수 있을 때까지 */
+const SWITCH_CD = 0.3;
+/** 골라 바꾼 먹의 첫 획 — 이 시간 안에 휘두르면 세게 들어간다 */
+const FRESH_TIME = 1.6;
+export const FRESH_MULT = 1.3;
 
 const DASH_TIME = 0.17;
 const DASH_SPEED = 680;
@@ -182,8 +192,14 @@ export class Game {
   rewards: Item[] = [];
   rewardTitle = '';
   banner: Banner | null = null;
-  /** 주속성이 바뀐 순간의 연출 */
-  switchFx: { ink: InkId | null; t: number } | null = null;
+  /** 붓의 먹이 바뀐 순간의 연출 */
+  switchFx: { ink: InkId | null; t: number; manual: boolean } | null = null;
+  /** 먹을 다시 바꿀 수 있을 때까지 */
+  private switchCd = 0;
+  /** 막 놀이로 돌아온 순간에는 보상 카드를 고른 숫자 키를 먹 바꾸기로 읽지 않는다 */
+  private switchGuard = 0;
+  /** 골라 바꾼 먹의 첫 획이 세게 들어가는 남은 시간 */
+  freshT = 0;
 
   /* 탐험 */
   room: RoomDef = firstRoom();
@@ -221,22 +237,24 @@ export class Game {
   onPhase: ((p: Phase) => void) | null = null;
 
   constructor() {
-    this.ink.onSwitch = (_from, to) => {
-      this.switchFx = { ink: to, t: 0 };
+    this.ink.onSwitch = (_from, to, manual) => {
+      this.switchFx = { ink: to, t: 0, manual };
       this.sounds.push({ type: 'switch', ink: to });
       const pl = this.player;
       const col = inkColor(to);
-      this.addRing('enso', pl.x, pl.y - 18, 20, 120, 0.8, 11, col);
-      for (let i = 0; i < 20; i++) {
-        const a = (i / 20) * TAU;
-        this.addParticle(pl.x, pl.y - 18, Math.cos(a) * rand(140, 280), Math.sin(a) * rand(140, 280), rand(2, 5), col, 0.85, rand(0.4, 0.8), true);
+      this.addRing('enso', pl.x, pl.y - 18, 20, manual ? 90 : 120, manual ? 0.55 : 0.8, manual ? 8 : 11, col);
+      const n = manual ? 10 : 20;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU;
+        this.addParticle(pl.x, pl.y - 18, Math.cos(a) * rand(120, 240), Math.sin(a) * rand(120, 240), rand(2, 4.5), col, 0.85, rand(0.35, 0.7), true);
       }
-      this.stamps.push({ kind: 'splat', x: pl.x, y: pl.y, r: 34, color: col, alpha: 0.4, seed: randomSeed() % 100000, rot: Math.random() * TAU, wet: 1 });
-      // 새 먹의 첫 타부터
+      this.stamps.push({ kind: 'splat', x: pl.x, y: pl.y, r: manual ? 22 : 34, color: col, alpha: manual ? 0.26 : 0.4, seed: randomSeed() % 100000, rot: Math.random() * TAU, wet: 1 });
+      // 새 먹의 첫 타부터. 골라 바꾼 먹의 첫 획은 더 세게 들어간다
       pl.comboStep = 0;
+      if (manual) this.freshT = FRESH_TIME;
     };
-    this.ink.onExcess = (ink) => {
-      if (!ink || this.phase !== 'play') return;
+    this.ink.onOverflow = (ink, on) => {
+      if (!on || this.phase !== 'play') return;
       const pl = this.player;
       const col = inkColor(ink);
       this.sounds.push({ type: 'switch', ink });
@@ -244,7 +262,14 @@ export class Game {
       if (this.excessNoticeT > 0) return;
       this.excessNoticeT = 25;
       const c = EXCESS_COST[ink];
-      this.banner = { title: `${INKS[ink].name}이 넘치다`, sub: `太過 — 상극 ×1.8 · 약점이 사라진다 · 대가: ${c.cost}`, t: 0, dur: 2.8, color: INKS[ink].edge, low: true };
+      this.banner = {
+        title: `${INKS[ink].name}이 넘치다`,
+        sub: `太過 — 쥐면 상극 ×1.8 · 약점이 사라진다 · 지니는 동안 ${c.cost}`,
+        t: 0,
+        dur: 3,
+        color: INKS[ink].edge,
+        low: true,
+      };
     };
   }
 
@@ -266,6 +291,7 @@ export class Game {
 
   setPhase(p: Phase): void {
     this.phase = p;
+    if (p === 'play') this.switchGuard = this.time + 0.25;
     this.onPhase?.(p);
   }
 
@@ -772,12 +798,13 @@ export class Game {
     this.excessNoticeT = Math.max(0, this.excessNoticeT - dt);
     const fighting = this.mode === 'endless' ? !!this.wave : this.roomPhase === 'fight';
     if (fighting && !this.transition) this.ink.dry(dt, this.has('pine-soot') ? 0.6 : 1, this.has('five-elements') ? 0.5 : 0);
-    const ex = this.ink.excess;
-    if (!ex) return;
+    const over = INK_ORDER.filter((id) => this.ink.over[id]);
+    if (!over.length) return;
     this.dripT -= dt;
     if (this.dripT > 0) return;
     this.dripT = rand(0.08, 0.16);
     const pl = this.player;
+    const ex = over[Math.floor(Math.random() * over.length)];
     this.addParticle(pl.x + rand(-9, 9), pl.y - rand(14, 30), rand(-20, 20), rand(30, 70), rand(1.5, 3), inkColor(ex), 0.85, rand(0.25, 0.45), true);
   }
 
@@ -925,6 +952,14 @@ export class Game {
       my /= ml;
     }
 
+    // 붓에 묻힐 먹을 바꾼다
+    this.switchCd = Math.max(0, this.switchCd - dt);
+    this.freshT = Math.max(0, this.freshT - dt);
+    if (this.switchCd <= 0 && this.time >= this.switchGuard) {
+      if (input.ink !== undefined && input.ink >= 0 && input.ink < INK_ORDER.length) this.pickInk(INK_ORDER[input.ink]);
+      else if (input.cycle) this.cycleInk(input.cycle > 0 ? 1 : -1);
+    }
+
     if (input.dash && pl.dashCd <= 0 && pl.dashT <= 0) this.startDash(mx, my, ml);
 
     if (input.attack) pl.queued = true;
@@ -938,7 +973,7 @@ export class Game {
     } else {
       let mul = pl.moveMul;
       if (pl.action) mul *= pl.action.phase === 'recovery' ? 0.65 : pl.action.move.moveMul ?? 0.4;
-      if (this.ink.excess === 'heuk') mul *= 0.85;
+      if (this.ink.over.heuk) mul *= 0.85;
       mul *= this.waterMul(pl.x, pl.y, false);
       if (this.has('night-rain') && pl.hp < pl.maxHp / 3) mul *= 1.15;
       const target = pl.speed * mul;
@@ -961,6 +996,27 @@ export class Game {
     if (!input.attack && !pl.action) pl.queued = false;
   }
 
+  /** 이 먹을 붓에 묻힌다 — 모자라면 알려 준다 */
+  pickInk(id: InkId): void {
+    if (this.ink.active === id) return;
+    const pl = this.player;
+    if (!this.ink.held(id)) {
+      this.switchCd = 0.4;
+      this.text(pl.x, pl.y - 78, `${INKS[id].hanja} 먹이 모자라다 (${Math.floor(this.ink.values[id])}/${HOLD_MIN})`, [120, 114, 104], 14);
+      return;
+    }
+    if (this.ink.wield(id)) this.switchCd = SWITCH_CD;
+  }
+
+  private cycleInk(dir: 1 | -1): void {
+    if (this.ink.cycle(dir)) this.switchCd = SWITCH_CD;
+    else {
+      this.switchCd = 0.6;
+      const pl = this.player;
+      this.text(pl.x, pl.y - 78, '바꿔 쥘 먹이 없다', [120, 114, 104], 14);
+    }
+  }
+
   private startDash(mx: number, my: number, ml: number): void {
     const pl = this.player;
     const dx = ml > 0.1 ? mx : Math.cos(pl.aim);
@@ -969,7 +1025,7 @@ export class Game {
     pl.dashDx = dx / l;
     pl.dashDy = dy / l;
     pl.dashT = DASH_TIME;
-    pl.dashCd = DASH_CD * pl.dashCdMul * (this.ink.excess === 'hwang' ? 1.4 : 1);
+    pl.dashCd = DASH_CD * pl.dashCdMul * (this.ink.over.hwang ? 1.4 : 1);
     // 비켜 선 자리에 남는 것들
     if (this.has('flint')) this.addZone('embers', pl.x, pl.y, 34, 2.6, 4, 0.3);
     if (this.has('gourd')) this.addZone('pool', pl.x + pl.dashDx * 50, pl.y + pl.dashDy * 50 + 8, 34, 3, 2, 0.3);
@@ -987,13 +1043,13 @@ export class Game {
 
   private startMove(): void {
     const pl = this.player;
-    const combo = this.character.combo(this.ink.dominant);
+    const combo = this.character.combo(this.ink.active);
     const step = pl.comboStep % combo.length;
     const move = combo[step];
     pl.action = {
       move,
       step,
-      ink: this.ink.dominant,
+      ink: this.ink.active,
       potency: this.ink.potency,
       aim: pl.aim,
       dir: step % 2 === 0 ? 1 : -1,
@@ -1004,10 +1060,12 @@ export class Game {
       hits: new Map(),
       seed: randomSeed() % 100000,
       heals: 0,
-      speed: pl.attackSpeed * (this.ink.excess === 'cheong' ? 0.85 : 1),
+      speed: pl.attackSpeed * (this.ink.over.cheong ? 0.85 : 1),
+      fresh: this.freshT > 0,
     };
     pl.comboStep = (step + 1) % combo.length;
     pl.queued = false;
+    this.freshT = 0;
   }
 
   private advanceAction(a: Action, dt: number): void {
@@ -1062,11 +1120,11 @@ export class Game {
     if (m.shake) this.shake = Math.max(this.shake, m.shake);
     if (a.step === 2) {
       this.punch = 1;
-      if (this.ink.excess === 'jeok') this.selfBurn(3);
+      if (this.ink.over.jeok) this.selfBurn(3);
     }
     this.sounds.push(m.visual === 'quake' ? { type: 'quake' } : { type: 'swing', ink: a.ink, step: a.step });
     const c = shapeCenter(a);
-    this.traces.push(this.traceFor(m, a.ink, a.step, c.x, c.y, a.aim, a.dir, a.potency, a.speed, a.seed));
+    this.traces.push(this.traceFor(m, a.ink, a.step, c.x, c.y, a.aim, a.dir, a.potency + (a.fresh ? 0.35 : 0), a.speed, a.seed));
     m.onActive?.(this, a);
   }
 
@@ -1132,7 +1190,7 @@ export class Game {
 
   private applyMoveHit(a: Action, e: Enemy): void {
     const m: Move = a.move;
-    let dmg = BASE_DAMAGE * m.damage * (1 + 0.6 * a.potency);
+    let dmg = BASE_DAMAGE * m.damage * (1 + 0.6 * a.potency) * (a.fresh ? FRESH_MULT : 1);
     const crit = this.rollCrit(a.ink, a.potency);
     if (crit) dmg *= this.critMult();
     const c = shapeCenter(a);
@@ -1354,9 +1412,9 @@ export class Game {
     this.sounds.push({ type: 'blink' });
   }
 
-  /** 여우에게 물리면 지금 주속성의 젖은 먹을 빼앗긴다 — 쓰러뜨리면 되찾는다 */
+  /** 여우에게 물리면 지금 쥔 먹의 젖은 먹을 빼앗긴다 — 쓰러뜨리면 되찾는다 */
   private foxSteal(e: Enemy): void {
-    const dom = this.ink.dominant;
+    const dom = this.ink.active;
     const pl = this.player;
     e.ai = 5;
     e.aiT = 1.6;
@@ -1864,7 +1922,7 @@ export class Game {
   hurtPlayer(dmg: number, el: InkId | null): boolean {
     const pl = this.player;
     if (pl.invuln > 0 || pl.dashT > 0 || this.phase !== 'play') return false;
-    if (this.ink.excess === 'baek') dmg *= 1.25;
+    if (this.ink.over.baek) dmg *= 1.25;
     if (this.has('clay-inkstone')) dmg *= 0.85;
     if (this.has('night-rain') && pl.hp < pl.maxHp / 3) dmg *= 0.65;
     pl.hp -= dmg;
@@ -1926,11 +1984,11 @@ export class Game {
   /* ───────── 화면이 묻는 것들 ───────── */
 
   get styleName(): string {
-    return this.character.styleName(this.ink.dominant);
+    return this.character.styleName(this.ink.active);
   }
 
   get comboMoves(): readonly Move[] {
-    return this.character.combo(this.ink.dominant);
+    return this.character.combo(this.ink.active);
   }
 
   /** 지금 펼치는(또는 다음에 나갈) 타 */

@@ -139,8 +139,10 @@ export function affinity(attack: InkId | null, target: InkId, excess = false): n
 }
 
 export const INK_MAX = 100;
-/** 주속성 먹이 이만큼 차면 태과(太過) — 강해지지만 넘친 먹이 나를 해친다 */
+/** 먹이 이만큼 차면 태과(太過) — 그 먹을 쥐면 강해지지만, 지니고 있는 동안 넘친 먹이 나를 해친다 */
 export const EXCESS_AT = 80;
+/** 이만큼 있는 먹은 붓에 묻혀 쓸 수 있다(쥘 수 있다) */
+export const HOLD_MIN = 10;
 
 /** 태과의 대가 — 먹마다 넘친 기운이 붓잡이를 해치는 방식이 다르다 */
 export const EXCESS_COST: Record<InkId, { title: string; cost: string }> = {
@@ -150,30 +152,34 @@ export const EXCESS_COST: Record<InkId, { title: string; cost: string }> = {
   baek: { title: '쇠가 부러지기 쉽다', cost: '받는 피해 +25%' },
   heuk: { title: '물이 몸을 무겁게 하다', cost: '걸음 −15%' },
 };
-/**
- * 주속성이 바뀌려면 새 먹이 지금 먹보다 이만큼 더 강해야 한다.
- * 비슷한 수치에서 공격이 정신없이 오락가락하지 않게 하는 여유폭.
- */
-export const SWITCH_MARGIN = 5;
 
 export type InkValues = Record<InkId, number>;
 export type InkDeltas = Partial<Record<InkId, number>>;
+export type InkFlags = Record<InkId, boolean>;
 
 export const emptyInk = (): InkValues => ({ cheong: 0, jeok: 0, hwang: 0, baek: 0, heuk: 0 });
+const noFlags = (): InkFlags => ({ cheong: false, jeok: false, hwang: false, baek: false, heuk: false });
 
-export function resolveDominant(values: InkValues, current: InkId | null): InkId | null {
+/** 가장 강한, 쥘 수 있는 먹 */
+export function strongestHeld(values: InkValues): InkId | null {
   let best: InkId | null = null;
-  let bv = 0;
+  let bv = HOLD_MIN - 0.001;
   for (const id of INK_ORDER) {
     if (values[id] > bv) {
       bv = values[id];
       best = id;
     }
   }
-  if (!best) return null;
-  if (!current || values[current] <= 0) return best;
-  if (best !== current && values[best] >= values[current] + SWITCH_MARGIN) return best;
-  return current;
+  return best;
+}
+
+/**
+ * 붓에 묻힌 먹은 붓잡이가 고른다. 저절로 바뀌는 때는 하나뿐 —
+ * 쥔 먹이 말라 쥘 수 없게 되면(또는 아직 아무 먹도 쥐지 않았으면) 가장 강한 먹으로 넘어간다.
+ */
+export function resolveActive(values: InkValues, current: InkId | null): InkId | null {
+  if (current && values[current] >= HOLD_MIN - 0.001) return current;
+  return strongestHeld(values);
 }
 
 /** 젖은 먹에 더하고 뺀다 — 굳은 먹과 합쳐 INK_MAX를 넘지 않는다 */
@@ -200,31 +206,65 @@ const DRY_BASE = 0.03;
  * 먹의 기운은 두 겹이다.
  *  - 젖은 먹(wet): 먹방울과 보상 카드로 얻는다. 싸우는 동안 조금씩 마른다.
  *  - 굳은 먹(locked): 지닌 물건이 붙잡고 있어 마르지도 씻기지도 않는다.
- * 둘을 합친 것이 그 먹의 기운(values)이고, 가장 강한 먹이 주속성이다.
+ * 둘을 합친 것이 그 먹의 기운(values)이다. HOLD_MIN 넘게 있는 먹은 쥘 수 있고,
+ * 붓잡이가 그 가운데 하나를 골라 붓에 묻힌다(active).
  */
 export class InkState {
   wet: InkValues = emptyInk();
   locked: InkValues = emptyInk();
   values: InkValues = emptyInk();
-  dominant: InkId | null = null;
-  /** 태과에 든 먹 */
-  excess: InkId | null = null;
-  /** 먹이 바뀐 순간 화면 연출을 위해 */
-  onSwitch: ((from: InkId | null, to: InkId | null) => void) | null = null;
-  /** 태과에 들거나 벗어난 순간 */
-  onExcess: ((ink: InkId | null) => void) | null = null;
+  /** 붓에 묻힌 먹 — 3타 콤보와 상극, 세기가 이 먹을 따른다 */
+  active: InkId | null = null;
+  /** 넘친(태과에 든) 먹들 — 지니고 있는 동안 대가를 치른다 */
+  over: InkFlags = noFlags();
+  /** 붓의 먹이 바뀐 순간. manual이면 붓잡이가 골라 바꾼 것 */
+  onSwitch: ((from: InkId | null, to: InkId | null, manual: boolean) => void) | null = null;
+  /** 어느 먹이 태과에 들거나 벗어난 순간 */
+  onOverflow: ((ink: InkId, on: boolean) => void) | null = null;
 
   reset(): void {
     this.wet = emptyInk();
     this.locked = emptyInk();
     this.values = emptyInk();
-    this.dominant = null;
-    this.excess = null;
+    this.active = null;
+    this.over = noFlags();
   }
 
-  /** 주속성 먹의 기운 0..1 — 공격의 세기를 정한다 */
+  /** 붓에 묻힌 먹의 기운 0..1 — 공격의 세기를 정한다 */
   get potency(): number {
-    return this.dominant ? this.values[this.dominant] / INK_MAX : 0;
+    return this.active ? this.values[this.active] / INK_MAX : 0;
+  }
+
+  /** 쥐고 있는 먹이 태과면 그 먹 — 상승(相乘)과 상모(相侮)를 얻는다 */
+  get excess(): InkId | null {
+    return this.active && this.over[this.active] ? this.active : null;
+  }
+
+  /** 쥘 수 있는 먹인지 */
+  held(id: InkId): boolean {
+    return this.values[id] >= HOLD_MIN - 0.001;
+  }
+
+  /** 붓에 이 먹을 묻힌다 — 쥘 수 없거나 이미 쥐고 있으면 false */
+  wield(id: InkId): boolean {
+    if (id === this.active || !this.held(id)) return false;
+    const prev = this.active;
+    this.active = id;
+    this.onSwitch?.(prev, id, true);
+    return true;
+  }
+
+  /** 쥘 수 있는 먹을 차례로 돌려 가며 바꾼다 (dir: 1 다음, −1 앞) */
+  cycle(dir: 1 | -1): InkId | null {
+    const start = this.active ? INK_ORDER.indexOf(this.active) : dir > 0 ? -1 : 0;
+    for (let k = 1; k <= INK_ORDER.length; k++) {
+      const id = INK_ORDER[(start + dir * k + INK_ORDER.length * 2) % INK_ORDER.length];
+      if (id !== this.active && this.held(id)) {
+        this.wield(id);
+        return id;
+      }
+    }
+    return null;
   }
 
   apply(deltas: InkDeltas): void {
@@ -251,7 +291,7 @@ export class InkState {
     for (const id of INK_ORDER) {
       const w = this.wet[id];
       if (w <= 0) continue;
-      const rate = (DRY_RATE * w + DRY_BASE) * mul * (this.excess === id ? 2 : 1);
+      const rate = (DRY_RATE * w + DRY_BASE) * mul * (this.over[id] ? 2 : 1);
       const lost = Math.min(w, rate * dt);
       this.wet[id] = w - lost < 0.02 ? 0 : w - lost;
       if (flow > 0) gain[GENERATES[id]] += lost * flow;
@@ -262,29 +302,31 @@ export class InkState {
     this.sync();
   }
 
-  preview(deltas: InkDeltas, lock?: { id: InkId; amount: number }): { values: InkValues; dominant: InkId | null } {
+  preview(deltas: InkDeltas, lock?: { id: InkId; amount: number }): { values: InkValues; active: InkId | null } {
     const locked = { ...this.locked };
     if (lock) locked[lock.id] = clamp(locked[lock.id] + lock.amount, 0, INK_MAX);
     const wet = applyWet(this.wet, locked, deltas);
     for (const id of INK_ORDER) wet[id] = Math.min(wet[id], INK_MAX - locked[id]);
     const values = sum(locked, wet);
-    return { values, dominant: resolveDominant(values, this.dominant) };
+    return { values, active: resolveActive(values, this.active) };
   }
 
   private sync(): void {
     this.values = sum(this.locked, this.wet);
-    const next = resolveDominant(this.values, this.dominant);
-    if (next !== this.dominant) {
-      const prev = this.dominant;
-      this.dominant = next;
-      this.onSwitch?.(prev, next);
+    const next = resolveActive(this.values, this.active);
+    if (next !== this.active) {
+      const prev = this.active;
+      this.active = next;
+      this.onSwitch?.(prev, next, false);
     }
     // 문턱 언저리에서 들락날락하지 않게, 한번 들면 조금 더 내려가야 벗어난다
-    const d = this.dominant;
-    const ex = d && (this.values[d] >= EXCESS_AT || (this.excess === d && this.values[d] >= EXCESS_AT - 4)) ? d : null;
-    if (ex !== this.excess) {
-      this.excess = ex;
-      this.onExcess?.(ex);
+    for (const id of INK_ORDER) {
+      const v = this.values[id];
+      const on = v >= EXCESS_AT || (this.over[id] && v >= EXCESS_AT - 4);
+      if (on !== this.over[id]) {
+        this.over[id] = on;
+        this.onOverflow?.(id, on);
+      }
     }
   }
 }

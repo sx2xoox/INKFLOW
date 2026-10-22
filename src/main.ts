@@ -10,7 +10,7 @@ import { Game, type InputFrame } from './game/game';
 import { WORLD_H, WORLD_W } from './game/types';
 import { View } from './gfx/view';
 import { ResolutionGovernor } from './gfx/governor';
-import { EXCESS_COST, INK_ORDER, type InkId, inkName } from './ink';
+import { EXCESS_COST, INK_ORDER, type InkId, counterOf, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
 import { CHAPTERS, ROOM_KINDS, bossDesc, chapterDone, chapterRoad } from './game/rooms';
 import { josa } from './core/hangul';
@@ -47,6 +47,7 @@ function canvasGlyphs(): string {
     ...CHAPTERS.flatMap((c) => [c.name, c.hanja, c.boss.name, c.boss.hanja, c.boss.title, `${josa(c.boss.title, '을/를')} 그려 내다`, bossDesc(c), chapterDone(c), chapterRoad(c), josa(c.boss.name, '이/가')]),
     '봉황 · 산사의 주인 鳳 · 산사의 주인이 날개를 편다 봉황이 떨어지다 종소리에 날개가 꺾였다 — 지금이 틈',
     '범종 — 붓으로 치면 종소리가 먹귀를 굳힌다 鐘 裂 石 甲 빼앗기다 먹을 되찾다',
+    '먹이 모자라다 () / 바꿔 쥘 먹이 없다 갈아 쥔 첫 획 ×1.3 Q E · 1–5 · 휠  먹 바꾸기 太過 쥐면 지니는 동안',
     '묵호 · 대숲의 주인 墨虎 · 대숲의 주인이 내려온다 을 두르다 묵호가 먹으로 갈아입는다 — 먹이 이긴다',
     '대숲의 주인을 그려 내다 의 마지막 폭에 낙관을 찍는다',
     '太過 상극 ×1.8 약점 없음 이 넘치다 약점이 사라진다 대가: 지닌 물건 서안 — 물건을 본다 서안에 다가가 물건을 본다 문방에서 물건을 고르다',
@@ -137,9 +138,11 @@ async function boot(): Promise<void> {
     if (document.hidden && game.phase === 'play' && !game.paused) ui.onPauseToggle?.();
   });
 
+  // 시험용: I를 누른 채 1–5면 그 먹 +10, O를 누른 채면 −10 (그냥 1–5는 먹 바꾸기)
   const debugKeys = (): void => {
-    INK_ORDER.forEach((id, i) => {
-      if (input.hit(`Digit${i + 1}`)) game.debugInk(id, input.down('ShiftLeft') ? -10 : 10);
+    const add = input.down('KeyI') ? 10 : input.down('KeyO') ? -10 : 0;
+    if (add) INK_ORDER.forEach((id, i) => {
+      if (input.hit(`Digit${i + 1}`)) game.debugInk(id, add);
     });
     if (input.hit('KeyN')) for (const e of game.enemies) e.hp = 0.01;
   };
@@ -237,10 +240,12 @@ function demoInput(g: Game, t: number): InputFrame {
   const pl = g.player;
   let target = { x: pl.x + Math.cos(t) * 100, y: pl.y + Math.sin(t) * 100 };
   let best = Infinity;
+  let nearest: (typeof g.enemies)[number] | null = null;
   for (const e of g.enemies) {
     const d = Math.hypot(e.x - pl.x, e.y - pl.y);
     if (d < best) {
       best = d;
+      nearest = e;
       target = { x: e.x, y: e.y - 10 };
     }
   }
@@ -258,7 +263,13 @@ function demoInput(g: Game, t: number): InputFrame {
     mx -= (target.x - pl.x) / best;
     my -= (target.y - pl.y) / best;
   }
-  return { moveX: mx, moveY: my, aimX: target.x, aimY: target.y, attack: best < 200, dash: best < 40 && Math.sin(t * 3) > 0.9 };
+  // 가까운 먹귀를 이기는 먹을 쥐고 있으면 바꿔 쥔다
+  let ink = -1;
+  if (nearest) {
+    const c = counterOf(nearest.el);
+    if (c !== g.ink.active && g.ink.held(c)) ink = INK_ORDER.indexOf(c);
+  }
+  return { moveX: mx, moveY: my, aimX: target.x, aimY: target.y, attack: best < 200, dash: best < 40 && Math.sin(t * 3) > 0.9, ink };
 }
 
 boot();

@@ -936,7 +936,7 @@ export function drawPlayerGear(sb: SB, pl: Player, col: RGB, potency: number, bo
   const len = 24 + potency * 4;
   sb.stroke([{ x: hx - ux * 8, y: hy - uy * 8 }, { x: hx + ux * len, y: hy + uy * len }], { width: 3.4, color: BAMBOO, alpha: 1, dryness: 0.25, taperIn: 0, taperOut: 0.05, seed: 402, edgeInk: 0.6 });
   sb.stroke([{ x: hx + ux * (len - 1), y: hy + uy * (len - 1) }, { x: hx + ux * (len + 3), y: hy + uy * (len + 3) }], { width: 4.6, color: INK, alpha: 1, dryness: 0.1, taperIn: 0, taperOut: 0, seed: 403 });
-  // 붓털 — 주속성 먹을 머금었다
+  // 붓털 — 쥔 먹을 머금었다
   const tipLen = 15 + potency * 5;
   const wob = Math.sin(time * 3) * 0.06;
   const tx = hx + ux * (len + 2);
@@ -951,7 +951,7 @@ export function drawPlayerGear(sb: SB, pl: Player, col: RGB, potency: number, bo
   );
 }
 
-/** 허리끈 — 주속성 먹의 색이 몸에 드러난다 */
+/** 허리끈 — 쥔 먹의 색이 몸에 드러난다 */
 export function drawSash(sb: SB, pl: Player, col: RGB, bob: number, time: number): void {
   const y = pl.y - 21 + bob;
   sb.stroke([{ x: pl.x - 10, y: y + 0.5 }, { x: pl.x, y: y + 1.5 }, { x: pl.x + 10, y }], { width: 4, color: col, alpha: 0.95, dryness: 0.25, taperIn: 0.05, taperOut: 0.05, seed: 410 });

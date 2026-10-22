@@ -8,7 +8,7 @@ import { type Game, numeral } from './game/game';
 import { CHAPTERS, ROOM_KINDS, type RoomDef, TOTAL_ROOMS } from './game/rooms';
 import type { Item } from './game/items';
 import { ARTIFACTS } from './game/artifacts';
-import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkDeltas, type InkId, inkHanja, inkName } from './ink';
+import { EXCESS_AT, EXCESS_COST, HOLD_MIN, INKS, INK_MAX, INK_ORDER, type InkDeltas, type InkId, inkHanja, inkName } from './ink';
 import { arcPoints, brushStroke, splatter, wash } from './render/brush';
 import { DAMMUK, INK, PAPER, mix, rgba } from './render/color';
 import { createPaperCanvas, paintSeal } from './render/paper';
@@ -157,18 +157,27 @@ export class UI {
     const lock = item.artifact ? { id: ARTIFACTS[item.artifact].ink, amount: ARTIFACTS[item.artifact].lock } : undefined;
     if (item.deltas || lock) {
       const pv = g.ink.preview(deltas, lock);
-      const now = g.ink.dominant;
-      const after = pv.dominant;
-      const moves = g.character.combo(after).map((m) => m.name).join(' → ');
-      const changed = after !== now;
-      const dom = el('div', `dom ${changed ? 'changed' : ''}`);
-      dom.innerHTML = changed
-        ? `주속성 <b style="color:${textInk(now)}">${inkHanja(now)}</b> → <b style="color:${textInk(after)}">${inkHanja(after)} ${inkName(after)}</b>`
-        : `주속성 그대로 · <b style="color:${textInk(after)}">${inkHanja(after)} ${inkName(after)}</b>`;
-      card.appendChild(dom);
-      card.appendChild(el('div', 'moves', moves));
-      if (after && pv.values[after] >= EXCESS_AT) {
-        card.appendChild(el('div', 'excess', `太過 · ${EXCESS_COST[after].cost}`));
+      // 이 카드가 움직이는 먹 — 옮기기는 빼는 먹과 받는 먹, 나머지는 그 먹 하나
+      const shown: InkId[] = item.kind === 'shift' ? [item.inks[0], item.inks[1]] : item.inks.slice(0, 1);
+      for (const id of shown) {
+        const before = g.ink.values[id];
+        const after = pv.values[id];
+        const note = before < HOLD_MIN && after >= HOLD_MIN ? ' · 새로 쥘 수 있다' : before >= HOLD_MIN && after < HOLD_MIN ? ' · 쥘 수 없게 된다' : '';
+        card.appendChild(
+          el('div', `dom ${note ? 'changed' : ''}`, `<b style="color:${textInk(id)}">${INKS[id].hanja}</b> ${Math.floor(before)} → <b>${Math.floor(after)}</b>${note}`),
+        );
+        if (after >= EXCESS_AT && !g.ink.over[id]) card.appendChild(el('div', 'excess', `太過 · ${EXCESS_COST[id].cost}`));
+      }
+      // 쥐었을 때 나갈 세 획 — 받는 먹 기준
+      const main = shown[shown.length - 1];
+      if (main && pv.values[main] >= HOLD_MIN) {
+        card.appendChild(el('div', 'moves', `${INKS[main].hanja} · ${g.character.combo(main).map((m) => m.name).join(' → ')}`));
+      }
+      // 쥔 먹이 말라 저절로 바뀌는 때
+      if (pv.active !== g.ink.active) {
+        card.appendChild(
+          el('div', 'dom changed', `붓의 먹 <b style="color:${textInk(g.ink.active)}">${inkHanja(g.ink.active)}</b> → <b style="color:${textInk(pv.active)}">${inkHanja(pv.active)} ${inkName(pv.active)}</b>`),
+        );
       }
     }
     card.appendChild(el('div', 'key', `${i + 1}`));
@@ -198,7 +207,7 @@ export class UI {
     return el(
       'div',
       'stats',
-      `${first}<div><span>쓰러뜨린 먹귀</span><b>${g.kills}</b></div><div><span>걸린 시간</span><b>${m}:${String(s).padStart(2, '0')}</b></div><div><span>마지막 먹</span><b>${inkHanja(g.ink.dominant)} ${inkName(g.ink.dominant)}</b></div>`,
+      `${first}<div><span>쓰러뜨린 먹귀</span><b>${g.kills}</b></div><div><span>걸린 시간</span><b>${m}:${String(s).padStart(2, '0')}</b></div><div><span>마지막 먹</span><b>${inkHanja(g.ink.active)} ${inkName(g.ink.active)}</b></div>`,
     );
   }
 
@@ -252,7 +261,7 @@ function controls(): HTMLElement {
   return el(
     'div',
     'controls',
-    `<div><kbd>W A S D</kbd> 걷기</div><div><kbd>마우스</kbd> 겨누기</div><div><kbd>왼쪽 클릭</kbd> 세 획 콤보 (누르고 있으면 이어서)</div><div><kbd>Space</kbd> / <kbd>오른쪽 클릭</kbd> 비켜 서기</div><div><kbd>F</kbd> 자동 휘두르기</div><div><kbd>Esc</kbd> 멈춤</div><div><kbd>M</kbd> 소리 끄기</div>`,
+    `<div><kbd>W A S D</kbd> 걷기</div><div><kbd>마우스</kbd> 겨누기</div><div><kbd>왼쪽 클릭</kbd> 세 획 콤보 (누르고 있으면 이어서)</div><div><kbd>Space</kbd> / <kbd>오른쪽 클릭</kbd> 비켜 서기</div><div><kbd>Q</kbd> <kbd>E</kbd> / <kbd>1–5</kbd> / 휠 먹 바꿔 쥐기</div><div><kbd>F</kbd> 자동 휘두르기</div><div><kbd>Esc</kbd> 멈춤</div><div><kbd>M</kbd> 소리 끄기</div>`,
   );
 }
 
@@ -264,8 +273,8 @@ function inkBars(g: Game): HTMLElement {
     const v = g.ink.values[id];
     const lk = g.ink.locked[id];
     const wt = g.ink.wet[id];
-    const dom = g.ink.dominant === id;
-    const ex = g.ink.excess === id;
+    const dom = g.ink.active === id;
+    const ex = g.ink.over[id];
     const bar = el('div', `inkbar ${dom ? 'dom' : ''} ${ex ? 'ex' : ''}`);
     const edge = id === 'baek' ? 'box-shadow: inset 0 0 0 1px rgba(110,106,98,.6);' : '';
     bar.innerHTML =

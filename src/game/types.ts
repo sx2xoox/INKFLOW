@@ -31,6 +31,8 @@ export interface Action {
   seed: number;
   heals: number;
   speed: number;
+  /** 골라 바꾼 먹의 첫 획 — 세게 들어간다 */
+  fresh: boolean;
 }
 
 export interface Player {

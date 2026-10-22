@@ -521,16 +521,16 @@ export class View {
     for (const r of g.rings) if (r.kind === 'spawn' || r.kind === 'shock' || r.kind === 'crack') drawRing(this.groundStrokes, r);
     drawDashTrail(this.groundStrokes, g.player);
 
-    // 주속성 먹의 기운이 발밑에 번진다
+    // 쥔 먹의 기운이 발밑에 번진다
     const pl = g.player;
-    if (g.ink.dominant) {
+    if (g.ink.active) {
       const s = this.groundPool.next();
       this.setFrame(s, 'blob/0');
       const k = ((22 + g.ink.potency * 10) / BLOB_R / BAKE) * (1 + 0.05 * Math.sin(t * 3));
       s.scale.set(k, k * 0.5);
       s.position.set(pl.x, pl.y + 1);
       s.rotation = 0;
-      s.tint = toHex(inkColor(g.ink.dominant));
+      s.tint = toHex(inkColor(g.ink.active));
       s.alpha = 0.14 + 0.1 * g.ink.potency;
     }
 
@@ -629,7 +629,7 @@ export class View {
     const bob = pl.moving ? -Math.abs(Math.cos((frame / WALK_FRAMES) * Math.PI * 2)) * 1.6 : 0;
     this.playerStrokes.begin();
     if (g.phase !== 'over') {
-      const col = inkColor(g.ink.dominant);
+      const col = inkColor(g.ink.active);
       drawSash(this.playerStrokes, pl, col, bob, t);
       drawPlayerGear(this.playerStrokes, pl, col, g.ink.potency, bob, t);
     }

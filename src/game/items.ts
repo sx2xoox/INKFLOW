@@ -1,6 +1,6 @@
 /**
  * 방 사이에 고르는 보상. 먹을 올리고(진묵), 씻어 내고(정화), 옮겨 담는(전환) 것으로
- * 플레이어가 주속성을 의도대로 다룰 수 있게 한다. 카드로 얻는 먹은 젖은 먹이라 싸우는 동안 마른다.
+ * 플레이어가 쥘 먹들을 의도대로 키우고 덜어 낼 수 있게 한다. 카드로 얻는 먹은 젖은 먹이라 싸우는 동안 마른다.
  * 물건(artifact)은 효과와 함께 한 가지 먹을 붙잡아 굳힌다.
  *
  * 물건을 얻는 길 — 문의 방 종류가 곧 보상의 종류다:
@@ -180,8 +180,8 @@ export function rollRewards(ink: InkState, o: RewardOptions = {}): Item[] {
   const manip: Item[] = [];
   for (const from of movable) for (const to of INK_ORDER) if (to !== from) manip.push(shiftItem(from, to));
   for (const id of wet) manip.push(purifyItem(id, ink.locked[id]));
-  // 지금 주속성을 상생의 다음 먹으로 옮기는 선택지가 자주 나오게
-  const dom = ink.dominant;
+  // 지금 쥔 먹을 상생의 다음 먹으로 옮기는 선택지가 자주 나오게
+  const dom = ink.active;
   if (dom && ink.wet[dom] >= SHIFT) manip.push(shiftItem(dom, GENERATES[dom]), shiftItem(dom, GENERATES[dom]));
   if (dom && ink.wet[dom] > 0) manip.push(purifyItem(dom, ink.locked[dom]));
   if (wet.length >= 3) manip.push(washAll);
@@ -223,7 +223,7 @@ export function springItems(ink: InkState): Item[] {
     { ...washAll, desc: '모든 젖은 먹 −15, 기력 15 회복', apply: (g) => g.healPlayer(15) },
   ];
   const wet = INK_ORDER.filter((id) => ink.wet[id] > 0).sort((a, b) => ink.wet[b] - ink.wet[a]);
-  const dom = ink.dominant;
+  const dom = ink.active;
   if (dom && ink.wet[dom] >= SHIFT) out.push(shiftItem(dom, GENERATES[dom]));
   else if (wet[0]) out.push(purifyItem(wet[0], ink.locked[wet[0]]));
   if (wet[1]) out.push(purifyItem(wet[1], ink.locked[wet[1]]));
