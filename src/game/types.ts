@@ -71,7 +71,7 @@ export interface Player {
   ky: number;
 }
 
-export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'tiger';
+export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'carp' | 'turtle' | 'tiger' | 'imugi';
 
 /**
  * 묵호(墨虎)의 동작.
@@ -81,8 +81,19 @@ export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'tiger';
  */
 export type TigerMove = 'perch' | 'descend' | 'roar' | 'stalk' | 'swipe' | 'crouch' | 'leap' | 'rest' | 'aim' | 'dash' | 'stagger' | 'die';
 
+/**
+ * 이무기의 동작.
+ * rise: 못에서 깨어난다 → roar / swim: 먹 속을 헤엄친다(붓이 닿지 않는다) → surface: 솟는다
+ * bite: 고개를 젖혔다 물어뜯는다 / spit: 먹물을 뿜는다 / sink: 다시 잠긴다
+ * burrow → burst: 잠긴 채 붓잡이 발밑을 노리다 치솟는다 / coil: 치솟은 뒤 몸을 사린다(틈)
+ */
+export type SerpentMove = 'rise' | 'swim' | 'surface' | 'bite' | 'spit' | 'sink' | 'burrow' | 'burst' | 'coil';
+
+export type BossMove = TigerMove | SerpentMove;
+
 export interface BossState {
-  move: TigerMove;
+  species: 'tiger' | 'imugi';
+  move: BossMove;
   /** 지금 동작에 들어선 뒤의 시간 */
   t: number;
   dur: number;
@@ -112,6 +123,12 @@ export interface BossState {
   dashCd: number;
   /** 내달리다 벽이나 바위에 막혔다 */
   blocked: boolean;
+  /** 이무기의 몸 — 머리부터 꼬리까지의 마디 */
+  spine: Vec[];
+  /** 먹 속에 잠긴 정도 0..1 */
+  under: number;
+  /** 머리가 향한 쪽(라디안) */
+  heading: number;
 }
 
 export interface Enemy {
@@ -153,6 +170,15 @@ export interface Enemy {
   charge: number;
   /** 쓰러지면 반드시 떨구는 먹의 양(0이면 종류의 기본 확률을 따른다) */
   loot: number;
+  /** 뛰어오른 자리(잉어) */
+  ox: number;
+  oy: number;
+  /** 땅에서 뜬 높이 */
+  z: number;
+  /** 옆모습 먹귀가 바라보는 쪽(거북은 천천히 돌아선다) */
+  side: 1 | -1;
+  /** 돌아서기까지 남은 시간 */
+  turnT: number;
   boss: BossState | null;
 }
 

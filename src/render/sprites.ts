@@ -365,6 +365,194 @@ export function drawBrute(ctx: Ctx, frame: number, color: RGB, edge: RGB, seed: 
   }
 }
 
+/* ───────── 연못의 먹귀 ───────── */
+
+/** 잉어 한 마리 — 오른쪽을 보고, 가운데가 (0,0) */
+function fish(ctx: Ctx, color: RGB, edge: RGB, seed: number, bend: number, mouth = 0): void {
+  const fin = mix(color, INK, isLight(color) ? 0.2 : 0.3);
+  // 꼬리지느러미 — 두 갈래
+  for (const s of [-1, 1]) {
+    brushStroke(ctx, [{ x: -15, y: s * 1 }, { x: -22, y: s * 4 + bend * 4 }, { x: -29, y: s * 9 + bend * 6 }], {
+      width: 6,
+      color: fin,
+      alpha: 0.95,
+      dryness: 0.45,
+      taperIn: 0.1,
+      taperOut: 0.85,
+      seed: seed + 1 + s,
+    });
+  }
+  // 등지느러미
+  brushStroke(ctx, [{ x: -8, y: -7 }, { x: -1, y: -13 }, { x: 6, y: -9 }], { width: 4.5, color: fin, alpha: 0.95, dryness: 0.5, taperIn: 0.2, taperOut: 0.6, seed: seed + 3 });
+  // 몸통
+  ctx.beginPath();
+  ctx.moveTo(19, 0);
+  ctx.bezierCurveTo(16, -8, 4, -10, -6, -8);
+  ctx.bezierCurveTo(-13, -6, -17, -2 + bend * 2, -17, 0 + bend * 2);
+  ctx.bezierCurveTo(-16, 4 + bend * 2, -8, 8, 2, 8);
+  ctx.bezierCurveTo(12, 8, 18, 4, 19, 0);
+  ctx.closePath();
+  bodyFill(ctx, 1, 0, 13, color, edge);
+  // 흰 배
+  brushStroke(ctx, [{ x: -10, y: 5 }, { x: 2, y: 7 }, { x: 14, y: 4 }], { width: 3.2, color: PAPER_LIGHT, alpha: isLight(color) ? 0.9 : 0.45, dryness: 0.3, seed: seed + 4 });
+  // 비늘 — 작은 반달을 겹쳐 찍는다
+  for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 2; j++) {
+      const x = -9 + i * 4.6 + j * 2.3;
+      const y = -4 + j * 4.2;
+      brushStroke(ctx, arcPoints(x, y, 2.4, -1.2, 2.4, 6), { width: 0.9, color: edge, alpha: 0.5, dryness: 0.3, seed: seed + 10 + i * 3 + j });
+    }
+  }
+  // 가슴지느러미와 아가미
+  brushStroke(ctx, [{ x: 6, y: 3 }, { x: 2, y: 9 }], { width: 3, color: fin, alpha: 0.9, dryness: 0.4, taperOut: 0.8, seed: seed + 5 });
+  brushStroke(ctx, arcPoints(10, 0, 5, -1.3, 2.6, 8), { width: 1.4, color: INK, alpha: 0.6, dryness: 0.4, seed: seed + 6 });
+  // 눈과 입, 수염
+  dot(ctx, 13.5, -2.2, 2.6, PAPER_LIGHT, 0.97, seed + 7);
+  dot(ctx, 14, -2, 1.4, INK, 1, seed + 8);
+  brushStroke(ctx, [{ x: 18, y: 1 + mouth }, { x: 21, y: 2 + mouth * 2 }], { width: 1.4, color: INK, alpha: 0.85, seed: seed + 9 });
+  brushStroke(ctx, [{ x: 17, y: 2 }, { x: 20, y: 6 }, { x: 24, y: 8 }], { width: 0.9, color: INK, alpha: 0.7, taperOut: 0.9, seed: seed + 20 });
+}
+
+/**
+ * 먹잉어. 0~5: 먹 속을 헤엄치는 모습(등과 지느러미만 보인다), 6: 뛰어오름, 7: 땅에서 퍼덕임.
+ * 원점은 몸 아래의 바닥.
+ */
+export function drawCarp(ctx: Ctx, frame: number, color: RGB, edge: RGB, seed: number): void {
+  if (frame < 6) {
+    const ph = (frame / 6) * TAU;
+    // 물결 — 먹 표면이 갈라진다
+    wash(ctx, 0, -1, 24, edge, 0.18, seed, 0.28);
+    for (const k of [0, 1]) {
+      const r = 16 + k * 8 + Math.sin(ph + k) * 1.5;
+      brushStroke(ctx, arcPoints(0, -1, r, Math.PI * 0.95, Math.PI * 1.1, 14, r, 0.28), { width: 1.6 - k * 0.4, color: edge, alpha: 0.55 - k * 0.2, dryness: 0.5, seed: seed + 30 + k });
+    }
+    // 드러난 등
+    const sw = Math.sin(ph) * 2;
+    ctx.beginPath();
+    ctx.moveTo(-15, -1);
+    ctx.bezierCurveTo(-8, -9 + sw * 0.3, 8, -10 - sw * 0.3, 16, -1);
+    ctx.quadraticCurveTo(0, -3, -15, -1);
+    ctx.closePath();
+    bodyFill(ctx, 0, -4, 10, color, edge);
+    brushStroke(ctx, [{ x: -4, y: -8 }, { x: 2, y: -15 + sw * 0.5 }, { x: 7, y: -9 }], { width: 4, color: mix(color, INK, 0.3), alpha: 0.95, dryness: 0.5, taperIn: 0.2, taperOut: 0.6, seed: seed + 3 });
+    // 꼬리 끝이 살랑인다
+    brushStroke(ctx, [{ x: -16, y: -2 }, { x: -22, y: -5 + sw }, { x: -27, y: -9 + sw * 1.4 }], { width: 4.5, color: mix(color, INK, 0.3), alpha: 0.9, dryness: 0.5, taperOut: 0.9, seed: seed + 4 });
+    return;
+  }
+  ctx.save();
+  if (frame === 6) {
+    // 활처럼 휘어 뛰어오른다
+    ctx.translate(0, -16);
+    ctx.rotate(-0.38);
+    fish(ctx, color, edge, seed, -0.8, 1.5);
+  } else {
+    // 옆으로 누워 퍼덕인다
+    ctx.translate(0, -8);
+    ctx.rotate(0.12);
+    fish(ctx, color, edge, seed, 1, 2);
+  }
+  ctx.restore();
+}
+
+/** 등딱지 — 거북의 몸통. 가운데가 (0, cy) */
+function shell(ctx: Ctx, cy: number, color: RGB, edge: RGB, seed: number): void {
+  ctx.beginPath();
+  ctx.moveTo(-18, cy + 6);
+  ctx.bezierCurveTo(-18, cy - 10, -8, cy - 16, 0, cy - 16);
+  ctx.bezierCurveTo(8, cy - 16, 18, cy - 10, 18, cy + 6);
+  ctx.quadraticCurveTo(0, cy + 9, -18, cy + 6);
+  ctx.closePath();
+  bodyFill(ctx, 0, cy - 4, 17, color, edge);
+  // 거북등 무늬 — 가운데 육각과 둘레의 갈래
+  const line = mix(edge, INK, 0.35);
+  const hex = [
+    { x: -6, y: cy - 4 },
+    { x: -3, y: cy - 10 },
+    { x: 4, y: cy - 10 },
+    { x: 7, y: cy - 4 },
+    { x: 4, y: cy + 1 },
+    { x: -3, y: cy + 1 },
+    { x: -6, y: cy - 4 },
+  ];
+  brushStroke(ctx, hex, { width: 1.6, color: line, alpha: 0.75, dryness: 0.4, taperIn: 0.05, taperOut: 0.05, seed: seed + 1 });
+  for (const [a, b] of [
+    [hex[0], { x: -16, y: cy - 2 }],
+    [hex[1], { x: -9, y: cy - 14 }],
+    [hex[2], { x: 9, y: cy - 14 }],
+    [hex[3], { x: 16, y: cy - 2 }],
+    [hex[4], { x: 8, y: cy + 6 }],
+    [hex[5], { x: -8, y: cy + 6 }],
+  ] as [Vec, Vec][]) {
+    brushStroke(ctx, [a, b], { width: 1.3, color: line, alpha: 0.65, dryness: 0.5, seed: seed + 2 + a.x });
+  }
+  // 테두리 띠
+  brushStroke(ctx, [{ x: -18, y: cy + 5 }, { x: 0, y: cy + 8.5 }, { x: 18, y: cy + 5 }], { width: 3.4, color: mix(color, INK, 0.4), alpha: 0.9, dryness: 0.35, seed: seed + 9 });
+}
+
+/**
+ * 먹거북. 0~5: 걷기, 6: 등딱지에 숨어 도는 모습, 7: 뒤집혀 버둥거림.
+ * 오른쪽을 보고, 원점은 발밑.
+ */
+export function drawTurtle(ctx: Ctx, frame: number, color: RGB, edge: RGB, seed: number): void {
+  const skin = mix(color, isLight(color) ? DAMMUK : PAPER_LIGHT, 0.25);
+  const skinEdge = mix(edge, INK, 0.3);
+  const limb = (x: number, y: number, dx: number, dy: number, s: number): void => {
+    brushStroke(ctx, [{ x, y }, { x: x + dx, y: y + dy }], { width: 5.5, color: skin, alpha: 1, dryness: 0.25, taperIn: 0.05, taperOut: 0.3, seed: seed + s, edgeColor: skinEdge });
+  };
+  if (frame === 6) {
+    // 숨은 등딱지 — 팽이처럼 돈다
+    shell(ctx, -10, color, edge, seed);
+    for (let k = 0; k < 3; k++) {
+      brushStroke(ctx, arcPoints(0, -8, 24 + k * 5, -2.6 + k * 1.9, 1.3, 10, 24 + k * 5, 0.45), { width: 2, color: edge, alpha: 0.45, dryness: 0.7, taperIn: 0.3, taperOut: 0.6, seed: seed + 40 + k });
+    }
+    dot(ctx, 15, -6, 2.4, INK, 0.8, seed + 50);
+    dot(ctx, -15, -6, 2.2, INK, 0.6, seed + 51);
+    return;
+  }
+  if (frame === 7) {
+    // 뒤집혀서 배딱지가 하늘을 보고, 네 발이 버둥거린다
+    ctx.save();
+    ctx.translate(0, -12);
+    ctx.scale(1, -1);
+    shell(ctx, 0, color, edge, seed);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.ellipse(0, -16, 15, 5, 0, 0, TAU);
+    ctx.fillStyle = rgba(mix(skin, PAPER_LIGHT, 0.4), 1);
+    ctx.fill();
+    brushStroke(ctx, [{ x: -12, y: -16 }, { x: 12, y: -16 }], { width: 1, color: skinEdge, alpha: 0.6, seed: seed + 60 });
+    for (const [x, d] of [
+      [-10, -1],
+      [-5, 1],
+      [5, -1],
+      [10, 1],
+    ] as [number, number][]) {
+      limb(x, -18, d * 3, -8, 61 + x);
+    }
+    // 어지러운 눈
+    inkBlob(ctx, 20, -10, 5, { color: skin, edge: skinEdge, alpha: 1, seed: seed + 70, halo: 0, wobble: 0.05 });
+    brushStroke(ctx, arcPoints(20, -10, 2.2, 0, TAU * 1.4, 12, 0.4), { width: 1, color: INK, alpha: 0.85, seed: seed + 71 });
+    return;
+  }
+  const ph = (frame / 6) * TAU;
+  const step = Math.sin(ph) * 3;
+  const bob = Math.abs(Math.cos(ph)) * 0.8;
+  // 먼 쪽 다리
+  limb(-9 - step, -5, -2, 5, 1);
+  limb(9 + step, -5, 2, 5, 2);
+  // 꼬리
+  brushStroke(ctx, [{ x: -17, y: -6 }, { x: -22, y: -4 }], { width: 3.5, color: skin, alpha: 1, taperOut: 0.9, seed: seed + 3, edgeColor: skinEdge });
+  // 목과 머리
+  brushStroke(ctx, [{ x: 13, y: -8 }, { x: 19, y: -10 - bob }], { width: 6, color: skin, alpha: 1, dryness: 0.2, seed: seed + 4, edgeColor: skinEdge });
+  inkBlob(ctx, 22, -11 - bob, 5.2, { color: skin, edge: skinEdge, alpha: 1, seed: seed + 5, halo: 0, wobble: 0.05, squash: 0.85 });
+  dot(ctx, 23.5, -12.5 - bob, 1.5, INK, 1, seed + 6);
+  brushStroke(ctx, [{ x: 24, y: -9 - bob }, { x: 27, y: -9.5 - bob }], { width: 1, color: INK, alpha: 0.7, seed: seed + 7 });
+  shell(ctx, -10 - bob, color, edge, seed);
+  // 가까운 쪽 다리
+  limb(-11 + step, -3, -2, 4, 8);
+  limb(11 - step, -3, 2, 4, 9);
+}
+
 /* ───────── 작은 것들 ───────── */
 
 /** 주울 수 있는 먹방울 */

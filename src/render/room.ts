@@ -4,8 +4,8 @@
  */
 import { type Vec, TAU } from '../core/math';
 import { type Rng, mulberry32 } from '../core/rng';
-import { ENTRANCE, type Obstacle, type RoomDef, type RoomLayout, WALL_TOP } from '../game/rooms';
-import { brushStroke, dot, inkBlob, wash } from './brush';
+import { CHAPTERS, ENTRANCE, type Obstacle, type RoomDef, type RoomLayout, WALL_TOP, type Water } from '../game/rooms';
+import { arcPoints, brushStroke, dot, inkBlob, wash } from './brush';
 import { type RGB, DAMMUK, INK, PAPER, PAPER_LIGHT, mix, rgba } from './color';
 import { createPaperCanvas } from './paper';
 
@@ -28,19 +28,21 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
     if (Math.hypot(x - ENTRANCE.x, y - ENTRANCE.y) < 90 + pad) return true;
     if (layout.pond && Math.hypot(x - layout.pond.x, (y - layout.pond.y) / 0.6) < layout.pond.r + 40 + pad) return true;
     if (layout.desk && Math.hypot(x - layout.desk.x, (y - layout.desk.y) / 0.6) < layout.desk.r + 50 + pad) return true;
+    if (layout.waters.some((w) => Math.hypot((x - w.x) / (w.rx + 20 + pad), (y - w.y) / (w.ry + 14 + pad)) < 1)) return true;
     return layout.obstacles.some((o) => Math.hypot(x - o.x, (y - o.y) / 0.62) < o.r + 30 + pad);
   };
 
-  // 떨어진 댓잎
+  const lotus = CHAPTERS[def.chapter].id === 'lotus';
+  // 떨어진 잎 — 대숲은 댓잎, 연못은 가는 버들잎
   for (let i = 0; i < 70; i++) {
     const x = range(rng, 60, w - 60);
     const y = range(rng, WALL_TOP + 30, h - 50);
     if (blocked(x, y, 0)) continue;
     const a = rng() * TAU;
-    const l = range(rng, 7, 13);
+    const l = range(rng, 7, 13) * (lotus ? 0.8 : 1);
     brushStroke(ctx, [{ x, y }, { x: x + Math.cos(a) * l, y: y + Math.sin(a) * l * 0.6 }], {
-      width: range(rng, 2.4, 3.6),
-      color: LEAF_INK,
+      width: range(rng, 2.4, 3.6) * (lotus ? 0.7 : 1),
+      color: lotus ? WILLOW_INK : LEAF_INK,
       alpha: range(rng, 0.18, 0.35),
       dryness: 0.2,
       taperIn: 0.3,
@@ -48,12 +50,21 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
       seed: Math.floor(rng() * 1e6),
     });
   }
-  // 풀
+  // 풀 — 연못에는 갈대가 섞인다
   for (let i = 0; i < 55; i++) {
     const x = range(rng, 60, w - 60);
     const y = range(rng, WALL_TOP + 40, h - 50);
     if (blocked(x, y, 10)) continue;
-    paintGrass(ctx, x, y, range(rng, 0.6, 1.2), rng);
+    if (lotus && rng() < 0.35) paintReeds(ctx, x, y, range(rng, 0.7, 1.1), rng);
+    else paintGrass(ctx, x, y, range(rng, 0.6, 1.2), rng);
+  }
+  // 물 — 가장자리에 갈대를 두른다
+  for (const water of layout.waters) {
+    paintWater(ctx, water, rng);
+    for (let k = 0; k < 7; k++) {
+      const a = rng() * TAU;
+      paintReeds(ctx, water.x + Math.cos(a) * (water.rx + 6), water.y + Math.sin(a) * (water.ry + 4), range(rng, 0.8, 1.25), rng);
+    }
   }
   // 난초 몇 포기
   for (let i = 0; i < 4; i++) {
@@ -125,6 +136,198 @@ function paintWall(ctx: Ctx, w: number, rng: Rng): void {
   for (let x = 6; x < w; x += 17) {
     dot(ctx, x, roofY + 10, 4.2, INK, 0.75, Math.floor(rng() * 1e6));
     brushStroke(ctx, [{ x, y: roofY - 8 }, { x: x + 2, y: roofY + 6 }], { width: 2, color: INK, alpha: 0.35, dryness: 0.6, seed: Math.floor(rng() * 1e6) });
+  }
+}
+
+/* ───────── 연못 ───────── */
+
+const WILLOW_INK: RGB = [70, 86, 62];
+const LILY: RGB = [96, 122, 98];
+const LOTUS_PINK: RGB = [222, 138, 146];
+
+/** 물이 고인 자리 — 맑은 먹의 물에 연잎이 뜨고 연꽃이 핀다 */
+function paintWater(ctx: Ctx, w: Water, rng: Rng): void {
+  wash(ctx, w.x, w.y, w.rx * 1.12, DAMMUK, 0.13, Math.floor(rng() * 1e6), (w.ry / w.rx) * 1.05);
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(w.x, w.y, w.rx, w.ry, 0, 0, TAU);
+  const g = ctx.createRadialGradient(w.x - w.rx * 0.25, w.y - w.ry * 0.3, w.ry * 0.2, w.x, w.y, w.rx);
+  g.addColorStop(0, rgba(mix(PAPER_LIGHT, [150, 172, 178], 0.25), 0.65));
+  g.addColorStop(0.7, rgba(mix(DAMMUK, [70, 98, 112], 0.45), 0.2));
+  g.addColorStop(1, rgba(mix(DAMMUK, [52, 74, 86], 0.45), 0.4));
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.restore();
+  // 물가 — 먹이 고여 짙은 테
+  brushStroke(ctx, arcPoints(w.x, w.y, w.rx, rng() * TAU, TAU * 0.97, 40, w.rx, w.ry / w.rx), {
+    width: 3,
+    color: mix(DAMMUK, [50, 70, 80], 0.4),
+    alpha: 0.45,
+    dryness: 0.7,
+    taperIn: 0.1,
+    taperOut: 0.1,
+    seed: Math.floor(rng() * 1e6),
+  });
+  // 잔물결
+  for (let k = 0; k < 7; k++) {
+    const rr = range(rng, 0.25, 0.85);
+    const a0 = rng() * TAU;
+    brushStroke(ctx, arcPoints(w.x, w.y, w.rx * rr, a0, range(rng, 0.8, 1.6), 10, w.rx * rr, w.ry / w.rx), {
+      width: 1.4,
+      color: DAMMUK,
+      alpha: 0.32,
+      dryness: 0.5,
+      taperIn: 0.3,
+      taperOut: 0.3,
+      seed: Math.floor(rng() * 1e6),
+    });
+  }
+  // 연잎 — 둥근 잎에 잎맥, 한쪽이 갈라졌다
+  const leaves = Math.round((w.rx * w.ry) / 3200);
+  for (let i = 0; i < leaves; i++) {
+    const a = rng() * TAU;
+    const d = Math.sqrt(rng()) * 0.85;
+    const lx = w.x + Math.cos(a) * w.rx * d;
+    const ly = w.y + Math.sin(a) * w.ry * d;
+    lilyPad(ctx, lx, ly, range(rng, 13, 24), rng);
+  }
+  // 연꽃
+  const flowers = 1 + Math.floor(leaves / 4);
+  for (let f = 0; f < flowers; f++) {
+    const a = rng() * TAU;
+    const d = Math.sqrt(rng()) * 0.7;
+    lotusFlower(ctx, w.x + Math.cos(a) * w.rx * d, w.y + Math.sin(a) * w.ry * d, range(rng, 0.8, 1.15), rng);
+  }
+}
+
+function lilyPad(ctx: Ctx, x: number, y: number, r: number, rng: Rng): void {
+  const seed = Math.floor(rng() * 1e6);
+  const notch = rng() * TAU;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.ellipse(x, y, r, r * 0.55, 0, notch + 0.25, notch + TAU - 0.25);
+  ctx.closePath();
+  const g = ctx.createRadialGradient(x, y, 1, x, y, r);
+  g.addColorStop(0, rgba(mix(LILY, PAPER_LIGHT, 0.25), 0.85));
+  g.addColorStop(1, rgba(mix(LILY, INK, 0.25), 0.85));
+  ctx.fillStyle = g;
+  ctx.fill();
+  for (let k = 0; k < 7; k++) {
+    const va = notch + 0.4 + (k / 7) * (TAU - 0.8);
+    brushStroke(ctx, [{ x, y }, { x: x + Math.cos(va) * r * 0.85, y: y + Math.sin(va) * r * 0.47 }], { width: 0.9, color: mix(LILY, INK, 0.5), alpha: 0.55, taperOut: 0.7, seed: seed + k });
+  }
+  brushStroke(ctx, arcPoints(x, y, r, notch + 0.3, TAU - 0.6, 18, r, 0.55), { width: 1.4, color: mix(LILY, INK, 0.55), alpha: 0.6, dryness: 0.5, seed: seed + 9 });
+}
+
+function lotusFlower(ctx: Ctx, x: number, y: number, s: number, rng: Rng): void {
+  const seed = Math.floor(rng() * 1e6);
+  lilyPad(ctx, x + 4, y + 6, 16 * s, rng);
+  for (let p = 0; p < 7; p++) {
+    const a = -Math.PI / 2 + (p - 3) * 0.36;
+    const len = (p === 3 ? 18 : 15 - Math.abs(p - 3) * 1.2) * s;
+    brushStroke(ctx, [{ x, y }, { x: x + Math.cos(a) * len * 0.6, y: y + Math.sin(a) * len * 0.75 }, { x: x + Math.cos(a) * len, y: y + Math.sin(a) * len }], {
+      width: 8 * s,
+      color: LOTUS_PINK,
+      alpha: 0.78,
+      dryness: 0.08,
+      taperIn: 0.35,
+      taperOut: 0.8,
+      seed: seed + p,
+      edgeColor: [176, 72, 86],
+    });
+  }
+  dot(ctx, x, y - 5 * s, 2.6 * s, [214, 172, 64], 0.95, seed + 20);
+}
+
+/** 갈대 — 가늘게 휜 줄기 끝에 이삭 */
+function paintReeds(ctx: Ctx, x: number, y: number, s: number, rng: Rng): void {
+  const n = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const lean = range(rng, -0.35, 0.35);
+    const h = range(rng, 34, 58) * s;
+    const bx = x + range(rng, -6, 6);
+    const tip = { x: bx + Math.sin(lean) * h, y: y - Math.cos(lean) * h };
+    brushStroke(ctx, [{ x: bx, y }, { x: bx + Math.sin(lean) * h * 0.5 + lean * 4, y: y - h * 0.5 }, tip], {
+      width: 1.8,
+      color: WILLOW_INK,
+      alpha: 0.6,
+      dryness: 0.3,
+      taperIn: 0.05,
+      taperOut: 0.6,
+      seed: Math.floor(rng() * 1e6),
+    });
+    if (rng() < 0.6) {
+      brushStroke(ctx, [tip, { x: tip.x + Math.sin(lean) * 9, y: tip.y - 10 }], { width: 3.4, color: [140, 116, 82], alpha: 0.7, dryness: 0.4, taperIn: 0.3, taperOut: 0.7, seed: Math.floor(rng() * 1e6) });
+    }
+  }
+  // 칼 같은 잎 하나
+  const a = range(rng, -0.9, 0.9);
+  brushStroke(ctx, [{ x, y }, { x: x + Math.sin(a) * 14 * s, y: y - 18 * s }, { x: x + Math.sin(a) * 30 * s, y: y - 24 * s }], {
+    width: 3,
+    color: WILLOW_INK,
+    alpha: 0.55,
+    dryness: 0.2,
+    taperIn: 0.1,
+    taperOut: 0.9,
+    seed: Math.floor(rng() * 1e6),
+  });
+}
+
+/** 수양버들 — 굽은 줄기에서 가는 가지가 길게 늘어진다 */
+function paintWillow(ctx: Ctx, r: number, rng: Rng, seed: number): void {
+  wash(ctx, 0, 4, r * 1.8, DAMMUK, 0.15, seed + 1, 0.4);
+  // 줄기 — 굵고 비틀린 먹
+  const lean = range(rng, -0.25, 0.25);
+  const trunk = [
+    { x: 0, y: 6 },
+    { x: lean * 20 + 4, y: -40 },
+    { x: lean * 40 - 6, y: -90 },
+    { x: lean * 60 + 2, y: -150 },
+  ];
+  brushStroke(ctx, trunk, { width: 22, color: mix(INK, DAMMUK, 0.35), alpha: 0.9, dryness: 0.6, taperIn: 0.02, taperOut: 0.4, seed: seed + 2, wet: 0.2 });
+  brushStroke(ctx, trunk.map((p) => ({ x: p.x - 6, y: p.y })), { width: 5, color: INK, alpha: 0.7, dryness: 0.7, taperIn: 0.1, taperOut: 0.5, seed: seed + 3 });
+  // 옹이
+  for (let i = 0; i < 3; i++) dot(ctx, range(rng, -6, 6) + lean * 40, range(rng, -120, -30), range(rng, 2, 3.5), INK, 0.7, seed + 4 + i);
+  // 가지와 늘어진 실가지
+  const top = trunk[trunk.length - 1];
+  const tips: { x: number; y: number }[] = [];
+  for (let b = 0; b < 6; b++) {
+    const a = -Math.PI / 2 + (b - 2.5) * 0.45 + range(rng, -0.15, 0.15);
+    const len = range(rng, 50, 85);
+    const mid = { x: top.x + Math.cos(a) * len * 0.5, y: top.y + Math.sin(a) * len * 0.5 - 8 };
+    const end = { x: top.x + Math.cos(a) * len, y: top.y + Math.sin(a) * len * 0.6 };
+    brushStroke(ctx, [top, mid, end], { width: 5 - Math.abs(b - 2.5), color: mix(INK, DAMMUK, 0.4), alpha: 0.85, dryness: 0.5, taperIn: 0.05, taperOut: 0.7, seed: seed + 10 + b });
+    tips.push(mid, end);
+  }
+  for (const [n, t] of tips.entries()) {
+    const strands = 3 + (n % 3);
+    for (let k = 0; k < strands; k++) {
+      const x0 = t.x + range(rng, -8, 8);
+      const len = range(rng, 70, 140);
+      const sway = range(rng, -10, 10);
+      const near = (n + k) % 3 !== 0;
+      brushStroke(
+        ctx,
+        [
+          { x: x0, y: t.y },
+          { x: x0 + sway * 0.3, y: t.y + len * 0.45 },
+          { x: x0 + sway, y: t.y + len },
+        ],
+        { width: 1.6, color: near ? WILLOW_INK : mix(WILLOW_INK, PAPER, 0.4), alpha: near ? 0.7 : 0.45, dryness: 0.25, taperIn: 0.05, taperOut: 0.85, seed: seed + 100 + n * 10 + k },
+      );
+      // 가는 잎이 줄지어 달린다
+      for (let j = 1; j < 6; j++) {
+        const yy = t.y + (len * j) / 6;
+        const xx = x0 + sway * (j / 6) * (j / 6);
+        const side = j % 2 ? 1 : -1;
+        brushStroke(ctx, [{ x: xx, y: yy }, { x: xx + side * 5, y: yy + 4 }], { width: 2.2, color: WILLOW_INK, alpha: near ? 0.55 : 0.35, taperIn: 0.3, taperOut: 0.8, seed: seed + 300 + n * 40 + k * 6 + j });
+      }
+    }
+  }
+  // 밑동의 풀
+  for (let i = 0; i < 4; i++) {
+    const gx = range(rng, -r * 1.1, r * 1.1);
+    brushStroke(ctx, [{ x: gx, y: 6 }, { x: gx + range(rng, -8, 8), y: -range(rng, 10, 20) }], { width: 2.4, color: DAMMUK, alpha: 0.5, taperIn: 0.05, taperOut: 0.85, seed: seed + 400 + i });
   }
 }
 
@@ -417,8 +620,9 @@ export interface ObstacleArt {
 
 export function paintObstacle(o: Obstacle, scale: number): ObstacleArt {
   const isRock = o.kind === 'rock';
-  const w = isRock ? o.r * 2.9 : o.r * 2 + 170;
-  const h = isRock ? o.r * 2.6 : 300;
+  const willow = o.kind === 'willow';
+  const w = isRock ? o.r * 2.9 : willow ? o.r * 2 + 230 : o.r * 2 + 170;
+  const h = isRock ? o.r * 2.6 : willow ? 330 : 300;
   const ox = w / 2;
   const oy = isRock ? h - o.r * 0.9 : h - 34;
   const c = document.createElement('canvas');
@@ -429,6 +633,7 @@ export function paintObstacle(o: Obstacle, scale: number): ObstacleArt {
   ctx.translate(ox, oy);
   const rng = mulberry32(o.seed);
   if (isRock) paintBoulder(ctx, o.r, rng, o.seed);
+  else if (willow) paintWillow(ctx, o.r, rng, o.seed);
   else paintBambooClump(ctx, o.r, rng, o.seed);
   return { canvas: c, ax: ox / w, ay: oy / h, scale };
 }

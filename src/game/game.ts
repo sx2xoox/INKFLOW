@@ -5,13 +5,14 @@ import { EXCESS_COST, INKS, INK_ORDER, InkState, type InkId, affinity, counterOf
 import { type RGB, DAMMUK, INK, SEAL } from '../render/color';
 import { BRUSH_WIELDER, type CharacterDef, critChance } from './characters';
 import { TIGER_BODY, tigerHitCircles, untouchable, updateTiger } from './boss';
-import { ENEMY_KINDS, makeEnemy, thinkEnemy } from './enemies';
+import { imugiHitCircles, updateImugi } from './imugi';
+import { ENEMY_KINDS, carpSubmerged, makeEnemy, thinkEnemy, turtleBlocks } from './enemies';
 import { ARTIFACTS, type ArtifactId } from './artifacts';
 import { type Item, artifactChoice, rollRewards, shopItems, springItems, startingItems } from './items';
 import { BASE_DAMAGE, type Move, inShape, shapeCenter } from './moves';
 import {
   type Beat,
-  CHAPTER,
+  CHAPTERS,
   ENTRANCE,
   GATE_R,
   GATE_Y,
@@ -21,10 +22,13 @@ import {
   type RoomLayout,
   WALL_TOP,
   encounter,
+  inWater,
   firstRoom,
   gateXs,
   holdDuration,
+  dmgScale,
   hpScale,
+  roomTitle,
   makeLayout,
   nextRooms,
 } from './rooms';
@@ -171,7 +175,7 @@ export class Game {
 
   /* 탐험 */
   room: RoomDef = firstRoom();
-  layout: RoomLayout = { obstacles: [], pond: null, desk: null };
+  layout: RoomLayout = { obstacles: [], pond: null, desk: null, waters: [] };
   roomPhase: RoomPhase = 'fight';
   /** 방이 바뀔 때마다 오른다 — 화면이 그림을 새로 그린다 */
   roomVersion = 0;
@@ -192,6 +196,9 @@ export class Game {
   artifactOrder: ArtifactId[] = [];
   /** 이번 문방의 서안에 놓인 물건 */
   stock: ArtifactId[] = [];
+  /** 정자의 샘과 서안을 이미 들렀는지 */
+  private restSpring = false;
+  private restShop = false;
   /** 태과 알림을 너무 자주 띄우지 않게 */
   private excessNoticeT = 0;
   /** 태과일 때 넘친 먹이 떨어지는 박자 */
@@ -269,7 +276,7 @@ export class Game {
       this.setRoom(firstRoom());
       this.nextThemes = this.room.el ? [this.room.el] : [];
     } else {
-      this.setRoom({ kind: 'hold', el: null, depth: 0, seed: 20261021 });
+      this.setRoom({ kind: 'hold', el: null, chapter: 0, depth: 0, seed: 20261021 });
       this.nextThemes = this.rollThemes(1);
     }
     this.rewards = startingItems();
@@ -302,8 +309,14 @@ export class Game {
     }
     if (this.mode === 'endless') this.beginWave(this.waveNo + 1);
     else if (this.rewardFor === 'start') this.beginRoom();
-    else this.openGates();
+    // 정자에서는 문이 이미 열려 있다 — 샘이나 서안을 들르고 돌아온다
+    else if (this.room.kind !== 'rest') this.openGates();
     this.setPhase('play');
+  }
+
+  /** 서안이 물건을 늘어놓고 있는지 (문방, 아직 들르지 않은 정자의 서안) */
+  get deskOpen(): boolean {
+    return this.roomPhase === 'shop' || (this.room.kind === 'rest' && !this.restShop);
   }
 
   /** 싸움터에 남은 것들을 모두 걷는다 */
@@ -325,7 +338,7 @@ export class Game {
     this.room = def;
     this.layout = makeLayout(def);
     this.roomVersion++;
-    this.roomPhase = def.kind === 'spring' ? 'spring' : def.kind === 'shop' ? 'shop' : 'fight';
+    this.roomPhase = def.kind === 'spring' ? 'spring' : def.kind === 'shop' ? 'shop' : def.kind === 'rest' ? 'open' : 'fight';
     const pl = this.player;
     pl.x = ENTRANCE.x;
     pl.y = ENTRANCE.y;
@@ -347,10 +360,20 @@ export class Game {
   private beginRoom(): void {
     const def = this.room;
     const info = ROOM_KINDS[def.kind];
-    const where = `${CHAPTER.name} · ${numeral(def.depth + 1)} 방`;
+    const where = roomTitle(def, numeral);
     if (def.kind === 'spring') {
       this.roomPhase = 'spring';
       this.banner = { title: where, sub: '샘에 다가가 먹을 씻는다', t: 0, dur: 2.6, color: INK };
+      return;
+    }
+    if (def.kind === 'rest') {
+      // 장 사이의 정자 — 문은 처음부터 열려 있고, 샘과 서안을 한 번씩 들를 수 있다
+      const ch = CHAPTERS[def.chapter];
+      this.restSpring = false;
+      this.restShop = false;
+      this.stock = shopItems(this.artifacts).stock;
+      this.openGates();
+      this.banner = { title: `${ch.name} · ${ch.hanja}`, sub: '정자에서 숨을 고른다 — 샘과 서안을 들르고 문을 고른다', t: 0, dur: 3, color: INK };
       return;
     }
     if (def.kind === 'shop') {
@@ -366,7 +389,7 @@ export class Game {
       this.beats = [];
       this.beatIndex = 0;
       this.beatDelay = 0;
-      this.addEnemy('tiger', def.el ?? 'heuk', WORLD_W / 2, 150, 1, false);
+      this.addEnemy(CHAPTERS[def.chapter].boss.kind, def.el ?? 'heuk', WORLD_W / 2, 150, 1, false);
       this.sounds.push({ type: 'wave' });
       return;
     }
@@ -381,7 +404,7 @@ export class Game {
         duration: holdDuration(def),
         spawnAcc: 0,
         spawning: true,
-        hpMul: hpScale(def.depth),
+        hpMul: hpScale(def),
         rate: 1.1 + def.depth * 0.35,
         packT: rand(5, 8),
       };
@@ -443,13 +466,43 @@ export class Game {
         this.setPhase('reward');
       }
     } else if (this.roomPhase === 'open') {
+      if (def.kind === 'rest') this.updateRest();
       this.updateGates(dt);
+    }
+  }
+
+  /** 정자 — 샘에 다가가면 씻고, 서안에 다가가면 물건을 본다. 한 번씩만 */
+  private updateRest(): void {
+    if (this.transition) return;
+    const pl = this.player;
+    const pond = this.layout.pond;
+    const desk = this.layout.desk;
+    if (!this.restSpring && pond && Math.hypot(pl.x - pond.x, (pl.y - pond.y) / 0.6) < pond.r * 0.95) {
+      this.restSpring = true;
+      this.healPlayer(10);
+      this.rewards = springItems(this.ink);
+      this.rewardTitle = '정자의 샘에서 먹을 씻다';
+      this.rewardFor = 'spring';
+      this.setPhase('reward');
+    } else if (!this.restShop && desk && Math.hypot(pl.x - desk.x, (pl.y - desk.y) / 0.6) < desk.r * 1.15) {
+      this.restShop = true;
+      const shop = shopItems(this.artifacts, this.stock);
+      this.stock = shop.stock;
+      this.rewards = shop.items;
+      this.rewardTitle = '정자의 서안에서 물건을 고르다';
+      this.rewardFor = 'shop';
+      this.setPhase('reward');
+    }
+    if (this.phase === 'reward') {
+      pl.action = null;
+      pl.queued = false;
     }
   }
 
   private spawnBeat(beat: Beat): void {
     const def = this.room;
-    const hp = hpScale(def.depth) * (def.kind === 'elite' ? 1.15 : 1);
+    const hp = hpScale(def) * (def.kind === 'elite' ? 1.15 : 1);
+    const dmg = dmgScale(def);
     for (const [kind, n] of beat.groups) {
       // 같은 무리는 한 자리 근처에서 솟는다
       const c = this.findSpawn(340);
@@ -457,7 +510,7 @@ export class Game {
         const a = Math.random() * TAU;
         const r = kind === 'brute' ? 0 : rand(10, 60);
         const p = this.freeSpot(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r * 0.7, ENEMY_KINDS[kind].r);
-        this.addEnemy(kind, this.roomElement(), p.x, p.y, hp);
+        this.addEnemy(kind, this.roomElement(), p.x, p.y, hp).dmg *= dmg;
       }
     }
   }
@@ -465,7 +518,8 @@ export class Game {
   /** 방 먹귀의 속성 — 가끔 다른 먹이 섞인다 */
   private roomElement(): InkId {
     const el = this.room.el;
-    if (el && Math.random() < 0.85) return el;
+    // 뒤의 장일수록 여러 먹이 섞여 나온다
+    if (el && Math.random() < 0.85 - this.room.chapter * 0.15) return el;
     return INK_ORDER[Math.floor(Math.random() * 5)];
   }
 
@@ -480,8 +534,8 @@ export class Game {
     if (this.has('pine-dropper')) this.healPlayer(10);
     this.banner =
       this.room.kind === 'boss'
-        ? { title: '대숲의 주인을 그려 내다', sub: `${CHAPTER.name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
-        : { title: '한 폭을 그려 내다', sub: `${CHAPTER.name} · ${numeral(this.room.depth + 1)} 방에 낙관을 찍는다`, t: 0, dur: 2.0, color: INK };
+        ? { title: `${CHAPTERS[this.room.chapter].boss.title}을 그려 내다`, sub: `${CHAPTERS[this.room.chapter].name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
+        : { title: '한 폭을 그려 내다', sub: `${roomTitle(this.room, numeral)}에 낙관을 찍는다`, t: 0, dur: 2.0, color: INK };
   }
 
   private offerClearRewards(): void {
@@ -519,9 +573,13 @@ export class Game {
     this.gates = rooms.map((room, i) => ({ x: xs[i], y: GATE_Y, r: GATE_R, room, open: 0, seed: randomSeed() % 100000 }));
     this.roomPhase = 'open';
     this.sounds.push({ type: 'gate' });
-    this.banner = next.length
-      ? { title: '문이 열리다', sub: '문에 적힌 먹과 방을 보고 길을 고른다', t: 0, dur: 2.4, color: INK }
-      : { title: `${CHAPTER.name}을 다 그리다`, sub: '마지막 문을 지나 화첩을 덮는다', t: 0, dur: 2.6, color: INK };
+    const ch = CHAPTERS[this.room.chapter];
+    const toRest = next.length === 1 && next[0].kind === 'rest';
+    this.banner = !next.length
+      ? { title: '병풍을 다 그리다', sub: '마지막 문을 지나 화첩을 덮는다', t: 0, dur: 2.6, color: INK }
+      : toRest
+        ? { title: `${ch.name}을 다 그리다`, sub: `${CHAPTERS[next[0].chapter].name}(${CHAPTERS[next[0].chapter].hanja})로 가는 문이 열린다`, t: 0, dur: 2.6, color: INK }
+        : { title: '문이 열리다', sub: '문에 적힌 먹과 방을 보고 길을 고른다', t: 0, dur: 2.4, color: INK };
   }
 
   private updateGates(dt: number): void {
@@ -862,6 +920,7 @@ export class Game {
       let mul = pl.moveMul;
       if (pl.action) mul *= pl.action.phase === 'recovery' ? 0.65 : pl.action.move.moveMul ?? 0.4;
       if (this.ink.excess === 'heuk') mul *= 0.85;
+      mul *= this.waterMul(pl.x, pl.y, false);
       if (this.has('night-rain') && pl.hp < pl.maxHp / 3) mul *= 1.15;
       const target = pl.speed * mul;
       const k = 1 - Math.exp(-14 * dt);
@@ -1097,8 +1156,13 @@ export class Game {
           break;
         }
       }
-      if (e.boss) updateTiger(this, e, dt);
+      if (e.boss) (e.boss.species === 'imugi' ? updateImugi : updateTiger)(this, e, dt);
       else thinkEnemy(this, e, dt);
+      if (!e.boss && e.kind !== 'carp' && e.kind !== 'turtle' && e.kind !== 'swallow') {
+        const wm = this.waterMul(e.x, e.y, false);
+        e.vx *= wm;
+        e.vy *= wm;
+      }
       const kdamp = Math.exp(-7 * dt);
       e.kx *= kdamp;
       e.ky *= kdamp;
@@ -1133,7 +1197,15 @@ export class Game {
     for (const e of es) {
       if (e.dead || e.spawnT > 0) continue;
       if (e.boss) {
-        this.tigerContact(e);
+        if (e.boss.species === 'imugi') this.imugiContact(e);
+        else this.tigerContact(e);
+        continue;
+      }
+      // 먹 속에 잠긴 잉어와 하늘의 잉어는 붓잡이와 부딪히지 않는다. 퍼덕이거나 뒤집힌 것은 닿아도 다치지 않는다
+      const harmless = (e.kind === 'carp' && e.ai !== 1) || (e.kind === 'turtle' && e.ai === 3);
+      if (e.kind === 'carp' && (e.ai === 0 || e.ai === 2)) {
+        e.x = clamp(e.x, WALL, WORLD_W - WALL);
+        e.y = clamp(e.y, WALL_TOP, WORLD_H - WALL);
         continue;
       }
       e.x = clamp(e.x, WALL, WORLD_W - WALL);
@@ -1147,12 +1219,29 @@ export class Game {
         // 붓잡이를 파고들지 못하게
         e.x = pl.x + (dx / d) * rr;
         e.y = pl.y + (dy / d) * rr;
-        if (e.stunT <= 0) this.hurtPlayer(e.dmg, e.el);
+        if (e.stunT <= 0 && !harmless) this.hurtPlayer(e.dmg, e.el);
       }
     }
   }
 
   /** 묵호는 무거워서 붓잡이를 밀어낸다. 닿기만 해서는 다치지 않는다 — 다치는 건 할퀴기·덮치기·내달리기 */
+  /** 솟아오른 이무기의 머리는 붓잡이를 밀어낸다. 몸 사이로는 지나갈 수 있다 */
+  private imugiContact(e: Enemy): void {
+    const b = e.boss!;
+    if (b.under > 0.5 || b.move === 'die' || b.move === 'rise') return;
+    const pl = this.player;
+    const rr = 30 + pl.r;
+    const dx = pl.x - e.x;
+    const dy = pl.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d < rr && pl.dashT <= 0) {
+      const k = d > 0.001 ? rr / d : 1;
+      pl.x = e.x + (d > 0.001 ? dx : 1) * k;
+      pl.y = e.y + (d > 0.001 ? dy : 0) * k;
+      this.pushOut(pl, pl.r);
+    }
+  }
+
   private tigerContact(e: Enemy): void {
     const b = e.boss!;
     if (b.move === 'perch' || b.move === 'descend') return;
@@ -1357,6 +1446,12 @@ export class Game {
     let bonus = 1;
     if (this.has('white-porcelain') && this.player.hp >= this.player.maxHp - 0.5) bonus *= 1.25;
     if (this.has('overflow-cup') && ex) bonus *= 1.2;
+    // 먹거북의 등딱지 — 앞에서 친 것(또는 숨어 도는 동안)은 거의 막힌다
+    const blocked = !o.quiet && turtleBlocks(e, o.kx ?? 0, o.ky ?? 0);
+    if (blocked) {
+      bonus *= 0.2;
+      if (Math.random() < 0.5) this.text(e.x + rand(-6, 6), e.y - e.r * 2.2, '甲', [96, 92, 86], 15);
+    }
     const dmg = amount * mult * bonus;
     e.hp -= dmg;
     if (!o.quiet) e.hitT = 0.14;
@@ -1389,12 +1484,40 @@ export class Game {
 
   /** 붓이 닿는 먹귀인지 — 솟는 중이거나 하늘 높이 뜬 묵호는 닿지 않는다 */
   hittable(e: Enemy): boolean {
-    return !e.dead && e.spawnT <= 0 && !untouchable(e);
+    return !e.dead && e.spawnT <= 0 && !untouchable(e) && !carpSubmerged(e);
+  }
+
+  /** 물에 들어서면 걸음이 무거워진다. 헤엄치는 것(잉어)은 오히려 빨라진다 */
+  waterMul(x: number, y: number, swimmer: boolean): number {
+    if (!this.layout.waters.length || !inWater(this.layout.waters, x, y)) return 1;
+    return swimmer ? 1.3 : 0.82;
+  }
+
+  /** 잉어가 먹 위로 솟는다 */
+  carpSurface(e: Enemy): void {
+    this.addRing('spawn', e.x, e.y, 8, 34, 0.45, 2.5, inkColor(e.el));
+    this.splash(e.x, e.y - 4, 10, inkColor(e.el), 5);
+  }
+
+  /** 잉어가 떨어진다 — 그 자리의 붓잡이를 친다 */
+  carpLand(e: Enemy): void {
+    const pl = this.player;
+    const col = inkColor(e.el);
+    this.addRing('shock', e.x, e.y, 8, 46, 0.35, 4, col);
+    this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: 18, color: col, alpha: 0.3, seed: e.seed + 9, rot: Math.random() * TAU, wet: 0.8 });
+    this.splash(e.x, e.y - 6, 14, col, 7);
+    if (Math.hypot(pl.x - e.x, pl.y - e.y) < 30 + pl.r) this.hurtPlayer(e.dmg, e.el);
+  }
+
+  /** 잉어가 다시 먹 속으로 잠긴다 */
+  carpDive(e: Enemy): void {
+    this.addRing('spawn', e.x, e.y, 6, 26, 0.4, 2, inkColor(e.el));
   }
 
   /** 맞는 자리 — 대부분 원 하나, 몸이 긴 묵호는 셋 */
   private bodyCircles(e: Enemy): { x: number; y: number; r: number }[] {
-    return e.boss ? tigerHitCircles(e) : [{ x: e.x, y: e.y - e.r * 0.5, r: e.r }];
+    if (e.boss) return e.boss.species === 'imugi' ? imugiHitCircles(e) : tigerHitCircles(e);
+    return [{ x: e.x, y: e.y - e.r * 0.5, r: e.r }];
   }
 
   /** 묵호의 기력이 다했다 — 바로 사라지지 않고 먹을 토하며 스러진다 */

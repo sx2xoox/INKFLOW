@@ -7,19 +7,21 @@ import { clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
 import type { Enemy } from '../game/types';
 import { TIGER_BODY } from '../game/boss';
+import { SPINE_N, segZ } from '../game/imugi';
 import { ARTIFACTS } from '../game/artifacts';
 import { TIGER_FRAMES, type TigerPoseName } from '../render/tiger';
 import { WORLD_H, WORLD_W } from '../game/types';
 import { INKS, inkColor } from '../ink';
 import { DAMMUK, INK, PAPER_LIGHT, mix } from '../render/color';
-import { CHAPTER, ROOM_KINDS, type RoomDef, WALL_TOP } from '../game/rooms';
+import { CHAPTERS, ROOM_KINDS, type RoomDef, WALL_TOP, roomDesc, roomGlyph } from '../game/rooms';
 import { paintSeal } from '../render/paper';
 import { createRoomCanvas, paintObstacle } from '../render/room';
 import { ENEMY_FRAMES, WALK_FRAMES } from '../render/sprites';
+import { arcPoints } from '../render/brush';
 import { BAKE, type Atlas, type Frame } from './atlas';
-import { BLOB_R, BLOB_VARIANTS, ENEMY_ART, WASH_R, WASH_VARIANTS, buildAtlas, enemyFrame, enemyWhite, tigerAtlas, tigerFrame } from './assets';
+import { BLOB_R, BLOB_VARIANTS, ENEMY_ART, WASH_R, WASH_VARIANTS, buildAtlas, enemyFrame, enemyWhite, imugiFrame, imugiWhite, tigerAtlas, tigerFrame } from './assets';
 import { Compositor } from './composite';
-import { drawDashTrail, drawGate, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTigerTells, drawTrace, drawZone } from './fx';
+import { drawDashTrail, drawGate, drawImugiTells, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTigerTells, drawTrace, drawZone } from './fx';
 import { Hud } from './hud';
 import { InkSim } from './inksim';
 import { bakePaperFx } from './paperfx';
@@ -81,6 +83,8 @@ export class View {
   private readonly groundStrokes = new StrokeBatch();
   private readonly fxStrokes = new StrokeBatch();
   private readonly playerStrokes = new StrokeBatch(4000);
+  /** 이무기의 몸 — 마디를 따라 붓으로 그린다 */
+  private readonly bossStrokes = new StrokeBatch(6000);
   private readonly groundPool: SpritePool;
   private readonly particlePool: SpritePool;
   private readonly textPool: SpritePool;
@@ -157,7 +161,7 @@ export class View {
     this.playerBody = this.frameSprite('player/0');
     this.playerFlash = this.frameSprite('player/white/0');
     this.player.addChild(this.playerBody, this.playerFlash);
-    this.entities.addChild(this.player, this.playerStrokes.mesh);
+    this.entities.addChild(this.player, this.playerStrokes.mesh, this.bossStrokes.mesh);
 
     this.hud = new Hud(this.hudLayer, this.atlas, this.text);
     this.resize();
@@ -324,7 +328,8 @@ export class View {
     const c = document.createElement('canvas');
     c.width = 120;
     c.height = 120;
-    paintSeal(c.getContext('2d')!, 60, 60, 92, `${CHAPTER.hanja}${['一', '二', '三', '四', '五', '六'][n - 1] ?? ''}`);
+    const room = g.cleared[n - 1];
+    paintSeal(c.getContext('2d')!, 60, 60, 92, `${CHAPTERS[room.chapter].hanja}${['一', '二', '三', '四', '五', '六', '七', '八'][room.depth] ?? ''}`);
     this.seal?.destroy({ texture: true, textureSource: true });
     this.seal = new Sprite(Texture.from(c));
     this.seal.anchor.set(0.5);
@@ -386,10 +391,15 @@ export class View {
     }
     // 대숲의 주인이 나타날 때는 담장 위의 범을 올려다본다
     const boss = g.enemies.find((e) => e.boss);
-    const intro = !this.focus && g.phase === 'play' && !!boss?.boss && (boss.boss.roared < 1 || (boss.boss.move === 'roar' && boss.boss.roared === 1 && boss.boss.t < 1.3));
-    if (intro && boss) {
+    const bb = boss?.boss;
+    const intro =
+      !this.focus &&
+      g.phase === 'play' &&
+      !!bb &&
+      (bb.move === 'perch' || bb.move === 'descend' || bb.move === 'rise' || (bb.species === 'tiger' && bb.move === 'roar' && bb.roared === 1 && bb.t < 1.3));
+    if (intro && boss && bb) {
       fx = lerp(pl.x, boss.x, 0.85);
-      fy = boss.y - boss.boss!.z - 60;
+      fy = boss.y - bb.z - 60;
     }
     let tx = fx - vw / 2;
     let ty = fy - vh / 2;
@@ -459,10 +469,15 @@ export class View {
       s.alpha = 0.14 + 0.1 * g.ink.potency;
     }
 
-    // 묵호가 두른 먹의 기운과 다음 수
+    // 묵호가 두른 먹의 기운과 다음 수, 이무기의 그림자
     for (const e of g.enemies) {
       if (!e.boss || e.dead) continue;
       const b = e.boss;
+      if (b.species === 'imugi') {
+        this.imugiShadow(e);
+        drawImugiTells(this.groundStrokes, e, t);
+        continue;
+      }
       const s = this.groundPool.next();
       this.setFrame(s, `wash/${e.seed % WASH_VARIANTS}`);
       const k = ((e.r * 2.3) / WASH_R / BAKE) * (1 + 0.06 * Math.sin(t * 2.4)) / (1 + b.z / 120);
@@ -543,6 +558,7 @@ export class View {
     this.playerStrokes.mesh.zIndex = Math.sin(pl.brushAngle) < -0.35 ? pl.y - 0.5 : pl.y + 0.5;
 
     // 먹귀
+    this.bossStrokes.begin();
     for (const sp of this.enemySprites.values()) sp.seen = false;
     for (const e of g.enemies) {
       let sp = this.enemySprites.get(e.id);
@@ -551,8 +567,9 @@ export class View {
         const shadow = this.frameSprite('shadow');
         shadow.tint = toHex(DAMMUK);
         const tiger = e.kind === 'tiger';
-        const body = this.frameSprite(tiger ? tigerFrame('walk') : enemyFrame(e.kind as keyof typeof ENEMY_ART, e.el, 0));
-        const flash = this.frameSprite(tiger ? tigerFrame('walk', 0, true) : enemyWhite(e.kind as keyof typeof ENEMY_ART, 0));
+        const imugi = e.kind === 'imugi';
+        const body = this.frameSprite(tiger ? tigerFrame('walk') : imugi ? imugiFrame(e.el, false) : enemyFrame(e.kind as keyof typeof ENEMY_ART, e.el, 0));
+        const flash = this.frameSprite(tiger ? tigerFrame('walk', 0, true) : imugi ? imugiWhite(false) : enemyWhite(e.kind as keyof typeof ENEMY_ART, 0));
         if (e.kind !== 'swallow') root.addChild(shadow);
         root.addChild(body, flash);
         this.entities.addChild(root);
@@ -564,12 +581,22 @@ export class View {
         this.drawTiger(e, sp, dt);
         continue;
       }
-      const art = ENEMY_ART[e.kind];
+      if (e.kind === 'imugi') {
+        this.drawImugi(e, sp, dt);
+        continue;
+      }
+      const kind = e.kind;
+      const art = ENEMY_ART[kind];
       const held = e.stunT > 0 || e.rootT > 0;
       const animSpeed = held ? 0.25 : e.slowT > 0 || e.inPool ? 0.5 : 1;
-      const f = Math.floor(((e.anim * animSpeed) / art.period) * ENEMY_FRAMES + e.seed) % ENEMY_FRAMES;
-      this.setFrame(sp.body, enemyFrame(e.kind, e.el, f));
-      this.setFrame(sp.flash, enemyWhite(e.kind, f));
+      // 잉어와 거북은 0~5가 움직임, 6·7은 동작에 따라 고른다
+      const posed = kind === 'carp' || kind === 'turtle';
+      const cycle = posed ? 6 : ENEMY_FRAMES;
+      let f = Math.floor(((e.anim * animSpeed) / art.period) * cycle + e.seed) % cycle;
+      if (kind === 'carp' && e.ai >= 2) f = e.ai === 2 ? 6 : 7;
+      if (kind === 'turtle' && e.ai >= 1) f = e.ai === 3 ? 7 : 6;
+      this.setFrame(sp.body, enemyFrame(kind, e.el, f));
+      this.setFrame(sp.flash, enemyWhite(kind, f));
       sp.root.position.set(e.x, e.y);
       sp.root.zIndex = e.y;
 
@@ -589,10 +616,15 @@ export class View {
       }
       let shiverX = 0;
       if (e.kind === 'swallow' && e.ai === 1) shiverX = Math.sin(t * 60) * 1.5;
-      const flipX = e.kind === 'swallow' ? 1 : e.vx < -5 ? -1 : e.vx > 5 ? 1 : (sp.body.scale.x < 0 ? -1 : 1);
+      if ((e.kind === 'carp' || e.kind === 'turtle') && e.ai === 1) shiverX = Math.sin(t * 55) * 1.2;
+      let flipX = e.kind === 'swallow' ? 1 : e.vx < -5 ? -1 : e.vx > 5 ? 1 : sp.body.scale.x < 0 ? -1 : 1;
+      if (posed) flipX = e.side;
+      // 도는 등딱지는 좌우로 번갈아 뒤집어 팽이처럼 보이게
+      if (e.kind === 'turtle' && e.ai === 2) flipX = Math.sin(t * 40) > 0 ? 1 : -1;
+      if (e.kind === 'carp' && e.ai === 3) sy *= 1 + 0.12 * Math.sin(t * 30);
 
-      sp.body.position.set(shiverX, 0);
-      sp.flash.position.set(shiverX, 0);
+      sp.body.position.set(shiverX, -e.z);
+      sp.flash.position.set(shiverX, -e.z);
       if (e.kind === 'swallow') {
         const up = Math.cos(e.face) < 0 ? -1 : 1;
         const hover = -18 + Math.sin(e.anim * 6) * 2;
@@ -606,12 +638,15 @@ export class View {
         sp.body.scale.set((sx * flipX) / BAKE, sy / BAKE);
         sp.flash.scale.set((sx * flipX) / BAKE, sy / BAKE);
       }
-      sp.body.alpha = e.spawnT > 0 ? grow : 1;
+      // 먹 속에 잠긴 잉어는 조금 비친다
+      const under = e.kind === 'carp' && e.ai <= 1;
+      sp.body.alpha = (e.spawnT > 0 ? grow : 1) * (under ? 0.85 : 1);
       sp.flash.alpha = e.hitT > 0 ? (e.hitT / 0.14) * 0.85 : 0;
-      const shk = (e.r * 1.3) / 31 / BAKE;
+      const shk = ((e.r * 1.3) / 31 / BAKE) / (1 + e.z / 60);
       sp.shadow.scale.set(shk * pop, shk * pop);
-      sp.shadow.alpha = 0.28;
+      sp.shadow.alpha = under ? 0 : 0.28 / (1 + e.z / 60);
     }
+    this.bossStrokes.end();
     for (const [id, sp] of this.enemySprites) {
       if (!sp.seen) {
         sp.shadow.visible = false;
@@ -707,6 +742,95 @@ export class View {
     sp.shadow.alpha = 0.3 * k * alpha;
   }
 
+  /** 이무기의 그림자 — 솟으면 땅에, 잠기면 종이 밑의 검은 그림자 */
+  private imugiShadow(e: Enemy): void {
+    const b = e.boss!;
+    const sb = this.groundStrokes;
+    const ground = b.spine.map((p) => ({ x: p.x, y: p.y }));
+    if (ground.length < 2) return;
+    const s = 1 - b.under;
+    if (b.under > 0.02) {
+      sb.stroke(ground, { width: 46, color: INK, alpha: 0.4 * b.under, dryness: 0.8, wet: 1, taperIn: 0.05, taperOut: 0.85, seed: e.seed + 1, bristles: 10 });
+      // 먹 속에서 눈만 번뜩인다
+      const h = ground[0];
+      const fx = Math.cos(b.heading);
+      const fy = Math.sin(b.heading);
+      for (const sd of [-1, 1]) {
+        const ex = h.x + fx * 12 - fy * 7 * sd;
+        const ey = h.y + fy * 6 + fx * 4 * sd;
+        sb.stroke([{ x: ex - 2, y: ey }, { x: ex + 2, y: ey }], { width: 4, color: [238, 196, 64], alpha: 0.85 * b.under, dryness: 0, taperIn: 0, taperOut: 0, seed: e.seed + 5 + sd });
+      }
+    }
+    if (s > 0.02) sb.stroke(ground, { width: 34, color: DAMMUK, alpha: 0.22 * s, dryness: 0.6, wet: 0.8, taperIn: 0.05, taperOut: 0.9, seed: e.seed + 2 });
+  }
+
+  /** 이무기 — 몸은 마디를 따라 긋고, 머리는 구워 둔 그림을 얹는다 */
+  private drawImugi(e: Enemy, sp: EnemySprites, dt: number): void {
+    const b = e.boss!;
+    const s = 1 - b.under;
+    const t = this.clock;
+    const col = inkColor(e.el);
+    const light = col[0] + col[1] + col[2] > 600;
+    const body = mix(col, INK, light ? 0.12 : 0.18);
+    const fin = mix(col, INK, light ? 0.4 : 0.5);
+    const pts = b.spine.map((p, i) => ({ x: p.x, y: p.y - 12 * s - segZ(b, i) + Math.sin(t * 4 - i * 0.5) * 1.2 * s }));
+    const fade = b.move === 'die' ? Math.max(0, 1 - Math.max(0, b.t / b.dur - 0.5) / 0.5) : 1;
+    if (s > 0.02 && pts.length > 2) {
+      const sb = this.bossStrokes;
+      // 지느러미 — 등을 따라 뾰족하게
+      for (let i = 2; i < SPINE_N - 6; i += 2) {
+        const a = pts[i - 1];
+        const c = pts[i + 1];
+        const dx = c.x - a.x;
+        const dy = c.y - a.y;
+        const l = Math.hypot(dx, dy) || 1;
+        const k = 1 - i / SPINE_N;
+        sb.stroke([pts[i], { x: pts[i].x - (dx / l) * 8 * k, y: pts[i].y - (12 * k + 4) }], {
+          width: 6 * k + 2,
+          color: fin,
+          alpha: 0.9 * s * fade,
+          dryness: 0.5,
+          taperIn: 0.1,
+          taperOut: 0.9,
+          seed: e.seed + 10 + i,
+        });
+      }
+      // 몸통
+      sb.stroke(pts, { width: 36, color: body, alpha: s * fade, dryness: 0.32, edgeInk: 0.7, wet: 0.3, taperIn: 0.02, taperOut: 0.85, seed: e.seed + 3, bristles: 16 });
+      // 흰 배
+      sb.stroke(
+        pts.map((p, i) => ({ x: p.x, y: p.y + 7 * (1 - i / SPINE_N) })),
+        { width: 12, color: mix(col, PAPER_LIGHT, light ? 0.1 : 0.55), alpha: 0.6 * s * fade, dryness: 0.4, taperIn: 0.05, taperOut: 0.85, seed: e.seed + 4 },
+      );
+      // 비늘 — 등줄기를 따라 반달 무늬
+      for (let i = 1; i < SPINE_N - 4; i++) {
+        const p = pts[i];
+        const r = 5 * (1 - i / SPINE_N) + 2;
+        sb.stroke(arcPoints(p.x, p.y - 2, r, -2.4, 1.6, 6), { width: 1.2, color: fin, alpha: 0.5 * s * fade, dryness: 0.4, seed: e.seed + 40 + i });
+      }
+    }
+    this.bossStrokes.mesh.zIndex = (b.spine[0]?.y ?? e.y) - 1;
+
+    // 머리
+    const open = (b.move === 'bite' && b.t > b.wind * 0.4) || (b.move === 'spit' && b.t > b.wind * 0.5) || b.move === 'roar' || b.move === 'burst' || (b.move === 'rise' && b.t > 1.3) || b.move === 'die';
+    this.setFrame(sp.body, imugiFrame(e.el, open));
+    this.setFrame(sp.flash, imugiWhite(open));
+    const head = pts[0] ?? { x: e.x, y: e.y };
+    sp.root.position.set(e.x, e.y);
+    sp.root.zIndex = e.y;
+    const flip = Math.cos(b.heading) >= 0 ? 1 : -1;
+    const tilt = clamp(Math.atan2(Math.sin(b.heading) * 0.5, Math.abs(Math.cos(b.heading))), -0.55, 0.55) - (b.z > 50 ? 0.25 : 0);
+    for (const spr of [sp.body, sp.flash]) {
+      spr.position.set(head.x - e.x, head.y - e.y);
+      spr.rotation = tilt * flip;
+      spr.scale.set(flip / BAKE, 1 / BAKE);
+    }
+    sp.body.alpha = s * fade;
+    sp.flash.alpha = e.hitT > 0 ? (e.hitT / 0.14) * 0.6 * s : 0;
+    sp.shadow.visible = false;
+    void dt;
+  }
+
   private drawFx(g: Game): void {
     const t = g.time;
     this.fxStrokes.begin();
@@ -763,13 +887,14 @@ export class View {
       const elCol = el ? (el === 'baek' ? ([96, 92, 86] as const) : INKS[el].edge) : INK;
       // 문 안의 글자 — 방 종류
       const k = this.textPool.next();
-      k.texture = this.text.get(room ? ROOM_KINDS[room.kind].hanja : '終', { size: 30, color: PAPER_LIGHT, res, weight: 900 });
+      k.texture = this.text.get(room ? roomGlyph(room) : '終', { size: 30, color: PAPER_LIGHT, res, weight: 900 });
       k.anchor.set(0.5);
       k.scale.set((1 + 0.08 * near) / res);
       k.position.set(gate.x, gate.y + 1);
       k.alpha = a;
       // 담 아래의 이름표
-      const label = room ? `${el ? INKS[el].hanja + ' ' : ''}${ROOM_KINDS[room.kind].name}` : '화첩을 덮는다';
+      const kindName = !room ? '' : room.kind === 'boss' ? CHAPTERS[room.chapter].boss.name : room.kind === 'rest' ? `${CHAPTERS[room.chapter].name} 어귀` : ROOM_KINDS[room.kind].name;
+      const label = room ? `${el ? INKS[el].hanja + ' ' : ''}${kindName}` : '화첩을 덮는다';
       const l = this.textPool.next();
       l.texture = this.text.get(label, { size: 17, color: room ? elCol : INK, res, weight: 900, halo: 2.4 });
       l.anchor.set(0.5);
@@ -778,7 +903,7 @@ export class View {
       l.alpha = a;
       if (near > 0.05 && room) {
         const d = this.textPool.next();
-        d.texture = this.text.get(ROOM_KINDS[room.kind].desc, { size: 13, color: mix(INK, DAMMUK, 0.3), res, weight: 700, halo: 2.2 });
+        d.texture = this.text.get(roomDesc(room), { size: 13, color: mix(INK, DAMMUK, 0.3), res, weight: 700, halo: 2.2 });
         d.anchor.set(0.5);
         d.scale.set(1 / res);
         d.position.set(gate.x, WALL_TOP + 48);
@@ -787,7 +912,7 @@ export class View {
     }
     // 문방 — 서안 위에 놓인 물건들이 떠 있다
     const desk = g.layout.desk;
-    if (desk && g.roomPhase === 'shop') {
+    if (desk && g.deskOpen) {
       const res = textRes(this.app.renderer.resolution * this.scale * 1.15);
       g.stock.forEach((id, i) => {
         const a = ARTIFACTS[id];

@@ -11,7 +11,7 @@ import { GENERATES, INKS, counterOf, inkColor } from '../ink';
 import { DAMMUK, INK } from '../render/color';
 import type { Game } from './game';
 import { hpScale } from './rooms';
-import { type BossState, type Enemy, type TigerMove, type Trace, WALL, WORLD_H, WORLD_W } from './types';
+import { type Banner, type BossMove, type BossState, type Enemy, type EnemyKind, type Trace, WALL, WORLD_H, WORLD_W } from './types';
 
 /** 할퀴기가 닿는 거리(몸 가운데부터)와 반각 */
 export const SWIPE_REACH = 128;
@@ -29,6 +29,7 @@ export const PERCH_Y = 64;
 
 export function makeBossState(): BossState {
   return {
+    species: 'tiger',
     move: 'perch',
     t: 0,
     dur: 1.5,
@@ -48,13 +49,17 @@ export function makeBossState(): BossState {
     pounceCd: 1.5,
     dashCd: 2,
     blocked: false,
+    spine: [],
+    under: 0,
+    heading: 0,
   };
 }
 
-/** 붓이 닿지 않는 때 — 담장 위, 뛰어내리는 중, 쓰러지는 중, 높이 뜬 때 */
+/** 붓이 닿지 않는 때 — 담장 위, 뛰어내리는 중, 쓰러지는 중, 높이 뜬 때. 이무기는 먹 속에 잠겼을 때 */
 export function untouchable(e: Enemy): boolean {
   const b = e.boss;
   if (!b) return false;
+  if (b.species === 'imugi') return b.move === 'die' || b.move === 'rise' || b.under > 0.5;
   return b.move === 'perch' || b.move === 'descend' || b.move === 'die' || b.z > AIR;
 }
 
@@ -70,9 +75,9 @@ export function tigerHitCircles(e: Enemy): { x: number; y: number; r: number }[]
 }
 
 /** 체력에 따른 사나움 */
-const phaseOf = (e: Enemy): number => (e.hp > e.maxHp * (2 / 3) ? 1 : e.hp > e.maxHp / 3 ? 2 : 3);
+export const phaseOf = (e: Enemy): number => (e.hp > e.maxHp * (2 / 3) ? 1 : e.hp > e.maxHp / 3 ? 2 : 3);
 
-function setMove(b: BossState, move: TigerMove, dur: number): void {
+export function setMove(b: BossState, move: BossMove, dur: number): void {
   b.move = move;
   b.t = 0;
   b.dur = dur;
@@ -80,7 +85,7 @@ function setMove(b: BossState, move: TigerMove, dur: number): void {
 }
 
 /** 지난 프레임에서 이번 프레임 사이에 시각 at을 지났는지 */
-const crossed = (b: BossState, prev: number, at: number): boolean => prev < at && b.t >= at;
+export const crossed = (b: BossState, prev: number, at: number): boolean => prev < at && b.t >= at;
 
 export function updateTiger(g: Game, e: Enemy, dt: number): void {
   const b = e.boss!;
@@ -149,9 +154,9 @@ export function updateTiger(g: Game, e: Enemy, dt: number): void {
       b.ax = ux;
       b.ay = uy;
       const intro = b.roared <= 1;
-      if (crossed(b, prev, 0.3)) roar(g, e, intro);
+      if (crossed(b, prev, 0.3)) roar(g, e, intro ? { title: '묵호', sub: '墨虎 · 대숲의 주인이 내려온다', t: 0, dur: 2.8, color: INK, low: true } : null);
       if (crossed(b, prev, 0.55)) {
-        if (!intro) changeInk(g, e);
+        if (!intro) changeInk(g, e, '묵호', (i) => (i % 2 === 0 ? 'drop' : 'swallow'));
         g.addRing('enso', e.x, e.y - 50, 60, 420, 1.1, 7, inkColor(e.el));
       }
       if (b.t >= b.dur) startStalk(b, intro ? 0.8 : 0.5);
@@ -423,19 +428,19 @@ function land(g: Game, e: Enemy, harm: boolean): void {
   if (dd < LAND_R + pl.r && g.hurtPlayer(18, e.el)) g.knockPlayer(dx / (dd || 1), dy / (dd || 1), 520);
 }
 
-/** 포효 — 붓잡이를 밀어내고 화면이 떨린다 */
-function roar(g: Game, e: Enemy, intro: boolean): void {
+/** 포효 — 붓잡이를 밀어내고 화면이 떨린다. 등장 때는 이름을 걸고 밀어내지 않는다 */
+export function roar(g: Game, e: Enemy, intro: Banner | null, headY = e.y - 50): void {
   const pl = g.player;
   g.sounds.push({ type: 'roar', big: true });
   g.shake = Math.max(g.shake, 16);
-  g.addRing('enso', e.x, e.y - 50, 30, 300, 0.9, 12, INK);
+  g.addRing('enso', e.x, headY, 30, 300, 0.9, 12, INK);
   for (let i = 0; i < 26; i++) {
     const a = rand(-Math.PI, 0);
     const sp = rand(200, 460);
-    g.addParticle(e.x + Math.cos(a) * 40, e.y - 50 + Math.sin(a) * 20, Math.cos(a) * sp, Math.sin(a) * sp * 0.6, rand(2, 4.5), i % 2 ? INK : inkColor(e.el), 0.75, rand(0.4, 0.8), true);
+    g.addParticle(e.x + Math.cos(a) * 40, headY + Math.sin(a) * 20, Math.cos(a) * sp, Math.sin(a) * sp * 0.6, rand(2, 4.5), i % 2 ? INK : inkColor(e.el), 0.75, rand(0.4, 0.8), true);
   }
   if (intro) {
-    g.banner = { title: '묵호', sub: '墨虎 · 대숲의 주인이 내려온다', t: 0, dur: 2.8, color: INK, low: true };
+    g.banner = intro;
     return;
   }
   const dx = pl.x - e.x;
@@ -451,7 +456,7 @@ function roar(g: Game, e: Enemy, intro: boolean): void {
  * 먹을 갈아입는다 — 상생의 차례로 다음 먹.
  * 새 먹을 이기는 먹귀들이 대숲에서 뛰어나오고, 쓰러지면 반드시 제 먹을 떨군다.
  */
-function changeInk(g: Game, e: Enemy): void {
+export function changeInk(g: Game, e: Enemy, name: string, minion: (i: number) => EnemyKind): void {
   const b = e.boss!;
   const next = GENERATES[e.el];
   e.el = next;
@@ -462,7 +467,7 @@ function changeInk(g: Game, e: Enemy): void {
   g.addRing('burst', e.x, e.y - 40, 30, 160, 0.6, 14, col);
   g.banner = {
     title: `${INKS[next].name}을 두르다`,
-    sub: `묵호가 ${INKS[next].hanja} 먹으로 갈아입는다 — ${INKS[counter].hanja} 먹이 이긴다`,
+    sub: `${name}가 ${INKS[next].hanja} 먹으로 갈아입는다 — ${INKS[counter].hanja} 먹이 이긴다`,
     t: 0,
     dur: 2.6,
     color: INKS[next].edge,
@@ -470,8 +475,7 @@ function changeInk(g: Game, e: Enemy): void {
   const n = b.phase === 2 ? 3 : 4;
   for (let i = 0; i < n; i++) {
     const c = g.findSpawn(320);
-    const kind = i % 2 === 0 ? 'drop' : 'swallow';
-    const m = g.addEnemy(kind, counter, c.x, c.y, hpScale(g.room.depth));
+    const m = g.addEnemy(minion(i), counter, c.x, c.y, hpScale(g.room));
     m.loot = 6;
   }
 }

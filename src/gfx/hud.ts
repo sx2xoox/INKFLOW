@@ -8,7 +8,7 @@ import type { Enemy } from '../game/types';
 import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkId, OVERCOMES, inkColor, inkEdge, inkName } from '../ink';
 import { ARTIFACTS } from '../game/artifacts';
 import { numeral } from '../game/game';
-import { CHAPTER, ROOM_KINDS } from '../game/rooms';
+import { CHAPTERS, roomGlyph, roomTitle } from '../game/rooms';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, PAPER_LIGHT, SEAL, mix } from '../render/color';
 import { BAKE, type Atlas } from './atlas';
@@ -199,14 +199,15 @@ export class Hud {
     let themes: InkId[] = [];
     if (g.mode === 'explore') {
       const room = g.room;
-      this.label(`${CHAPTER.name} · ${numeral(room.depth + 1)} 방`, w / 2, m + 12, { size: 30, color: INK, font: BRUSH_FONT, weight: 400, halo: 2 });
-      // 장의 방들 — 다 그린 방은 그 먹 색으로 채운다
+      this.label(roomTitle(room, numeral), w / 2, m + 12, { size: 30, color: INK, font: BRUSH_FONT, weight: 400, halo: 2 });
+      // 이 장의 방들 — 다 그린 방은 그 먹 색으로 채운다
+      const chRooms = CHAPTERS[room.chapter].rooms;
       const gap = 30;
-      const x0 = w / 2 - ((CHAPTER.rooms - 1) * gap) / 2;
+      const x0 = w / 2 - ((chRooms - 1) * gap) / 2;
       const ny = m + 44;
-      for (let i = 0; i < CHAPTER.rooms; i++) {
+      for (let i = 0; i < chRooms; i++) {
         const x = x0 + i * gap;
-        const done = g.cleared[i];
+        const done = g.cleared.find((c) => c.chapter === room.chapter && c.depth === i);
         if (i > 0) this.strokes.stroke([{ x: x - gap + 9, y: ny }, { x: x - 9, y: ny }], { width: 1.6, color: DAMMUK, alpha: 0.4, dryness: 0.5, taperIn: 0.1, taperOut: 0.1, seed: 80 + i });
         if (done) this.frame(`blob/${i % 6}`, x, ny, 8 / BLOB_R, done.el ? INKS[done.el].color : DAMMUK, 0.95);
         const current = i === room.depth && !done;
@@ -223,7 +224,7 @@ export class Hud {
       const sy = m + 66;
       const boss = room.kind === 'boss' ? g.enemies.find((e) => e.boss) : undefined;
       if (boss) {
-        this.bossBar(boss, sy);
+        this.bossBar(g, boss, sy);
       } else if (g.roomPhase === 'fight' && room.kind !== 'hold') {
         const left = g.beatsLeft;
         this.label(left > 0 ? `먹귀 ${g.enemies.length} · 남은 무리 ${left}` : `남은 먹귀 ${g.enemies.length}`, w / 2, sy, { size: 14, color: INK, halo: 2, weight: 700 });
@@ -261,14 +262,15 @@ export class Hud {
   }
 
   /** 대숲의 주인 — 이름과 긴 기력 획. 2/3, 1/3 자리에 포효할 마디가 있다 */
-  private bossBar(e: Enemy, y: number): void {
+  private bossBar(g: Game, e: Enemy, y: number): void {
     const b = e.boss!;
-    if (b.roared < 1) {
+    // 나타나는 동안은 아직 이름을 걸지 않는다
+    if (b.move === 'perch' || b.move === 'descend' || (b.move === 'rise' && b.t < 1.5) || (b.species === 'tiger' && b.roared < 1)) {
       this.bossShown = 1;
       this.bossGhost = 1;
       return;
     }
-    const appear = b.roared > 1 || b.move !== 'roar' ? 1 : clamp((b.t - 0.3) / 0.5, 0, 1);
+    const appear = b.move === 'rise' ? clamp((b.t - 1.5) / 0.5, 0, 1) : b.species === 'tiger' && b.roared === 1 && b.move === 'roar' ? clamp((b.t - 0.3) / 0.5, 0, 1) : 1;
     const w = this.w;
     // 왼쪽 위 콤보 표시와 겹치지 않을 만큼
     const L = clamp(w - 760, 220, 460);
@@ -278,7 +280,8 @@ export class Hud {
     this.bossShown = this.bossShown < 0 ? fr : lerp(this.bossShown, fr, 0.25);
     this.bossGhost = fr < this.bossGhost ? lerp(this.bossGhost, fr, 0.03) : fr;
     const col = INKS[e.el].color;
-    this.label('묵호 · 대숲의 주인', w / 2, y, { size: 15, color: INK, halo: 2.2, weight: 900 }, 0.5, 0.5, appear);
+    const lord = CHAPTERS[g.room.chapter].boss;
+    this.label(`${lord.name} · ${lord.title}`, w / 2, y, { size: 15, color: INK, halo: 2.2, weight: 900 }, 0.5, 0.5, appear);
     this.strokes.stroke([{ x: x0, y: by }, { x: x0 + L * 0.5, y: by - 2 }, { x: x0 + L, y: by }], { width: 13, color: DAMMUK, alpha: 0.16 * appear, dryness: 0.7, taperIn: 0.02, taperOut: 0.04, seed: 140 });
     if (this.bossGhost > 0.005) {
       this.strokes.stroke([{ x: x0, y: by }, { x: x0 + L * this.bossGhost, y: by - 1 }], { width: 11, color: mix(SEAL, PAPER_LIGHT, 0.5), alpha: 0.65 * appear, dryness: 0.45, taperIn: 0.02, taperOut: 0.1, seed: 141 });
@@ -348,7 +351,7 @@ export class Hud {
     const mid = 1 - Math.abs(tr.t - half) / half;
     const room = tr.to;
     const res = textRes(this.res * 1.4);
-    this.wipeGlyph.texture = this.text.get(room ? ROOM_KINDS[room.kind].hanja : '終', {
+    this.wipeGlyph.texture = this.text.get(room ? roomGlyph(room) : '終', {
       size: 140,
       color: room?.el ? mix(INKS[room.el].color, PAPER_LIGHT, 0.35) : PAPER_LIGHT,
       weight: 900,

@@ -5,7 +5,7 @@
 import { TAU } from './core/math';
 import { mulberry32 } from './core/rng';
 import { type Game, numeral } from './game/game';
-import { CHAPTER, ROOM_KINDS, type RoomDef } from './game/rooms';
+import { CHAPTERS, ROOM_KINDS, type RoomDef, TOTAL_ROOMS } from './game/rooms';
 import type { Item } from './game/items';
 import { ARTIFACTS } from './game/artifacts';
 import { EXCESS_AT, EXCESS_COST, INKS, INK_MAX, INK_ORDER, type InkDeltas, type InkId, inkHanja, inkName } from './ink';
@@ -96,7 +96,7 @@ export class UI {
     const b = el('button', 'btn big', '붓을 들다');
     b.onclick = () => this.game.startRun('explore');
     box.appendChild(b);
-    const sub = el('p', 'mode-desc', `${CHAPTER.name}의 방 ${CHAPTER.rooms}칸을 문을 골라 지나간다`);
+    const sub = el('p', 'mode-desc', `${CHAPTERS.map((c) => `${c.name}(${c.hanja})`).join(' · ')} — 방 ${TOTAL_ROOMS}칸을 문을 골라 지나간다`);
     box.appendChild(sub);
     const e = el('button', 'btn ghost', '끝없는 물결');
     e.onclick = () => this.game.startRun('endless');
@@ -194,7 +194,7 @@ export class UI {
     const g = this.game;
     const m = Math.floor(g.runTime / 60);
     const s = Math.floor(g.runTime % 60);
-    const first = g.mode === 'explore' ? `<div><span>그려 낸 방</span><b>${g.cleared.length} / ${CHAPTER.rooms}</b></div>` : `<div><span>넘긴 물결</span><b>${g.waveNo}</b></div>`;
+    const first = g.mode === 'explore' ? `<div><span>그려 낸 방</span><b>${g.cleared.length} / ${TOTAL_ROOMS}</b></div>` : `<div><span>넘긴 물결</span><b>${g.waveNo}</b></div>`;
     return el(
       'div',
       'stats',
@@ -220,7 +220,7 @@ export class UI {
     const g = this.game;
     this.root.classList.add('won-screen');
     const box = el('div', 'panel won');
-    box.appendChild(el('h2', 'brush', `${CHAPTER.name}을 다 그리다`));
+    box.appendChild(el('h2', 'brush', '병풍을 다 그리다'));
     box.appendChild(el('p', 'tag', '싸우며 남긴 먹 자국이 그대로 그림이 되었다'));
     box.appendChild(this.albumView());
     box.appendChild(this.stats());
@@ -238,9 +238,10 @@ export class UI {
       img.src = canvas.toDataURL('image/jpeg', 0.9);
       img.alt = `${numeral(room.depth + 1)} 방`;
       fig.appendChild(img);
-      const kind = ROOM_KINDS[room.kind];
+      const ch = CHAPTERS[room.chapter];
+      const kind = room.kind === 'boss' ? ch.boss.name : ROOM_KINDS[room.kind].name;
       const elName = room.el ? `<b style="color:${textInk(room.el)}">${INKS[room.el].hanja}</b> ` : '';
-      fig.appendChild(el('figcaption', '', `${numeral(room.depth + 1)} 방 · ${elName}${kind.name}`));
+      fig.appendChild(el('figcaption', '', `${ch.name} ${numeral(room.depth + 1)} 방 · ${elName}${kind}`));
       wrap.appendChild(fig);
     });
     return wrap;

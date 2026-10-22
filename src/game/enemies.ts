@@ -4,6 +4,7 @@ import { randomSeed } from '../core/rng';
 import type { InkId } from '../ink';
 import type { Game } from './game';
 import { makeBossState } from './boss';
+import { makeImugiState } from './imugi';
 import type { Enemy, EnemyKind } from './types';
 
 export interface EnemyKindDef {
@@ -22,7 +23,10 @@ export const ENEMY_KINDS: Record<EnemyKind, EnemyKindDef> = {
   swallow: { name: '먹제비', r: 11, hp: 15, speed: 118, dmg: 9, mass: 0.7, dropChance: 0.35, dropAmount: 4 },
   toad: { name: '먹두꺼비', r: 17, hp: 32, speed: 70, dmg: 7, mass: 1.6, dropChance: 0.5, dropAmount: 5 },
   brute: { name: '묵괴', r: 29, hp: 120, speed: 50, dmg: 16, mass: 4, dropChance: 1, dropAmount: 10 },
+  carp: { name: '먹잉어', r: 14, hp: 26, speed: 105, dmg: 10, mass: 1.2, dropChance: 0.4, dropAmount: 4 },
+  turtle: { name: '먹거북', r: 21, hp: 70, speed: 42, dmg: 12, mass: 3.4, dropChance: 0.75, dropAmount: 6 },
   tiger: { name: '묵호', r: 40, hp: 1800, speed: 112, dmg: 14, mass: 14, dropChance: 1, dropAmount: 24 },
+  imugi: { name: '이무기', r: 36, hp: 2400, speed: 150, dmg: 16, mass: 20, dropChance: 1, dropAmount: 24 },
 };
 
 let nextId = 1;
@@ -65,11 +69,35 @@ export function makeEnemy(kind: EnemyKind, el: InkId, x: number, y: number, hpMu
     ty: 0,
     charge: 0,
     loot: 0,
-    boss: kind === 'tiger' ? makeBossState() : null,
+    ox: x,
+    oy: y,
+    z: 0,
+    side: 1,
+    turnT: 0,
+    boss: kind === 'tiger' ? makeBossState() : kind === 'imugi' ? makeImugiState() : null,
   };
 }
 
 const SWALLOW_WINDUP = 0.42;
+const CARP_RISE = 0.45;
+const CARP_LEAP = 0.52;
+const CARP_FLOP = 1.1;
+const TURTLE_TUCK = 0.5;
+const TURTLE_SPIN = 1.15;
+const TURTLE_SPIN_SPEED = 330;
+const TURTLE_DIZZY = 1.5;
+
+/** 먹잉어 — 먹 속에 잠겨 헤엄치다(붓이 닿지 않는다) 솟아올라 붓잡이에게 뛰어든다. 떨어진 뒤엔 잠시 퍼덕인다 */
+export const carpSubmerged = (e: Enemy): boolean => e.kind === 'carp' && e.ai === 0;
+
+/** 먹거북이 등딱지로 막고 있는지 — 몸을 숨기고 도는 중이면 어디서 쳐도 막는다 */
+export function turtleBlocks(e: Enemy, kx: number, ky: number): boolean {
+  if (e.kind !== 'turtle') return false;
+  if (e.ai === 1 || e.ai === 2) return true;
+  if (e.ai === 3) return false;
+  // 앞에서(바라보는 쪽에서) 친 것만 막는다 — 밀려나는 방향이 등 쪽이면 앞에서 맞은 것
+  return kx * e.side < 0 && Math.abs(kx) > Math.abs(ky) * 0.5;
+}
 const SWALLOW_DASH = 0.5;
 const SWALLOW_DASH_SPEED = 440;
 const TOAD_CHARGE = 0.55;
@@ -89,7 +117,8 @@ export function thinkEnemy(g: Game, e: Enemy, dt: number): void {
 
   switch (e.kind) {
     case 'tiger':
-      // 묵호는 boss.ts가 움직인다
+    case 'imugi':
+      // 주인들은 boss.ts, imugi.ts가 움직인다
       break;
     case 'drop':
     case 'brute': {
@@ -138,6 +167,118 @@ export function thinkEnemy(g: Game, e: Enemy, dt: number): void {
       const sp = Math.hypot(e.vx, e.vy);
       if (sp > 5) e.face = Math.atan2(e.vy, e.vx);
       else e.face = Math.atan2(uy, ux);
+      break;
+    }
+    case 'carp': {
+      if (e.ai === 0) {
+        // 먹 속을 비스듬히 헤엄쳐 다가온다
+        const side = e.seed % 2 ? 1 : -1;
+        const curl = d > 260 ? 0.35 : 0.8;
+        const sp = spd * g.waterMul(e.x, e.y, true);
+        e.vx = (ux * (1 - curl) - uy * curl * side) * sp + ux * sp * 0.5;
+        e.vy = (uy * (1 - curl) + ux * curl * side) * sp + uy * sp * 0.5;
+        if (d < 230 && e.aiT <= 0 && !held) {
+          e.ai = 1;
+          e.aiT = CARP_RISE;
+          // 뛰어들 자리 — 붓잡이가 가는 쪽을 조금 앞질러
+          const t = g.freeSpot(p.x + p.vx * 0.25, p.y + p.vy * 0.25, e.r);
+          e.tx = t.x;
+          e.ty = t.y;
+          g.carpSurface(e);
+        }
+      } else if (e.ai === 1) {
+        e.vx *= 0.7;
+        e.vy *= 0.7;
+        if (e.aiT <= 0) {
+          e.ai = 2;
+          e.aiT = CARP_LEAP;
+          e.ox = e.x;
+          e.oy = e.y;
+        }
+      } else if (e.ai === 2) {
+        const k = clamp(1 - e.aiT / CARP_LEAP, 0, 1);
+        e.vx = 0;
+        e.vy = 0;
+        e.x = e.ox + (e.tx - e.ox) * k;
+        e.y = e.oy + (e.ty - e.oy) * k;
+        e.z = Math.sin(Math.PI * k) * (40 + Math.hypot(e.tx - e.ox, e.ty - e.oy) * 0.18);
+        if (e.aiT <= 0) {
+          e.z = 0;
+          e.ai = 3;
+          e.aiT = CARP_FLOP;
+          g.carpLand(e);
+        }
+      } else {
+        // 퍼덕인다 — 이때가 틈이다
+        e.vx *= 0.8;
+        e.vy *= 0.8;
+        if (e.aiT <= 0) {
+          e.ai = 0;
+          e.aiT = rand(1.4, 2.4);
+          g.carpDive(e);
+        }
+      }
+      if (Math.abs(e.vx) > 5) e.side = e.vx > 0 ? 1 : -1;
+      if (e.ai === 1 || e.ai === 2) e.side = e.tx >= e.x ? 1 : -1;
+      break;
+    }
+    case 'turtle': {
+      if (e.ai === 0) {
+        // 느릿느릿 다가오며, 붓잡이가 등 뒤로 돌면 한참 뒤에야 돌아선다
+        const want: 1 | -1 = dx >= 0 ? 1 : -1;
+        if (want !== e.side) {
+          e.turnT += dt;
+          if (e.turnT > 0.75) {
+            e.side = want;
+            e.turnT = 0;
+          }
+        } else e.turnT = 0;
+        const sp = spd * g.waterMul(e.x, e.y, false);
+        e.vx = ux * sp * (e.turnT > 0 ? 0.3 : 1);
+        e.vy = uy * sp * (e.turnT > 0 ? 0.3 : 1);
+        if (e.aiT <= 0 && d < 400 && !held) {
+          e.ai = 1;
+          e.aiT = TURTLE_TUCK;
+        }
+      } else if (e.ai === 1) {
+        // 등딱지 속으로 숨는다
+        e.vx *= 0.7;
+        e.vy *= 0.7;
+        e.tx = ux;
+        e.ty = uy;
+        if (e.aiT <= 0) {
+          e.ai = 2;
+          e.aiT = TURTLE_SPIN;
+          e.charge = 0;
+          g.sounds.push({ type: 'dash' });
+        }
+      } else if (e.ai === 2) {
+        // 팽이처럼 돌며 미끄러진다 — 담이나 바위에 맞으면 튕긴다
+        const s = held ? 0 : TURTLE_SPIN_SPEED * slow;
+        e.vx = e.tx * s;
+        e.vy = e.ty * s;
+        const nx = e.x + e.vx * dt;
+        const ny = e.y + e.vy * dt;
+        if (nx < 70 || nx > 1530) e.tx = -e.tx;
+        if (ny < 200 || ny > 940) e.ty = -e.ty;
+        if (g.insideObstacle(nx, ny, e.r * 0.6)) {
+          e.tx = -e.tx;
+          e.ty = -e.ty;
+        }
+        if (e.aiT <= 0) {
+          e.ai = 3;
+          e.aiT = TURTLE_DIZZY;
+          g.addRing('crack', e.x, e.y, 6, 30, 0.4, 2, e.el === 'baek' ? [120, 116, 108] : [60, 56, 50]);
+        }
+      } else {
+        // 뒤집혀 버둥거린다 — 어디서 쳐도 들어간다
+        e.vx *= 0.75;
+        e.vy *= 0.75;
+        if (e.aiT <= 0) {
+          e.ai = 0;
+          e.aiT = rand(3.2, 4.6);
+        }
+      }
       break;
     }
     case 'toad': {

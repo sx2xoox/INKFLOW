@@ -12,7 +12,7 @@ import { View } from './gfx/view';
 import { ResolutionGovernor } from './gfx/governor';
 import { EXCESS_COST, INK_ORDER, type InkId, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
-import { CHAPTER, ROOM_KINDS } from './game/rooms';
+import { CHAPTERS, ROOM_KINDS } from './game/rooms';
 import { ARTIFACT_LIST, type ArtifactId } from './game/artifacts';
 import { Input } from './input';
 import { UI } from './ui';
@@ -25,6 +25,8 @@ const DEBUG = params.has('debug');
 const DEMO = params.has('demo');
 /** 그림 점검용 진열장 */
 const GALLERY = params.get('gallery');
+/** 시험용 방이 몇 번째 장에 있는지 (?ch=1) */
+const DEBUG_CH = Math.max(0, Math.min(1, Number(params.get('ch')) || 0));
 /** 해상도를 고정해서 볼 때 (?res=1.5) */
 const FORCED_RES = Number(params.get('res')) || 0;
 
@@ -40,7 +42,8 @@ function canvasGlyphs(): string {
     '먹귀의 기운 유리한 먹 남은 먹귀 붓잡이 0123456789+-!·「」—',
     '방 문이 열리다 문에 적힌 먹과 방을 보고 길을 고른다 문을 골라 지나간다 남은 무리',
     '한 폭을 그려 내다 낙관을 찍는다 샘에 다가가 먹을 씻는다 화첩을 덮는다 다 그리다 마지막 문을 지나',
-    `${CHAPTER.name}${CHAPTER.hanja}一二三四五六終`,
+    '一二三四五六七八終 어귀 정자에서 숨을 고른다 — 샘과 서안을 들르고 문을 고른다 병풍을 다 그리다 로 가는 문이 열린다',
+    ...CHAPTERS.flatMap((c) => [c.name, c.hanja, c.boss.name, c.boss.hanja, c.boss.title, `${c.boss.title}을 그려 내다`, `${c.boss.title} ${c.boss.name}와 맞선다`]),
     '묵호 · 대숲의 주인 墨虎 · 대숲의 주인이 내려온다 을 두르다 묵호가 먹으로 갈아입는다 — 먹이 이긴다',
     '대숲의 주인을 그려 내다 의 마지막 폭에 낙관을 찍는다',
     '太過 상극 ×1.8 약점 없음 이 넘치다 약점이 사라진다 대가: 지닌 물건 서안 — 물건을 본다 서안에 다가가 물건을 본다 문방에서 물건을 고르다',
@@ -183,12 +186,21 @@ async function boot(): Promise<void> {
   // 시험용: 곧장 대숲의 주인에게 (?boss 또는 ?boss=jeok)
   if (params.has('boss')) {
     const el = (INK_ORDER as readonly string[]).includes(params.get('boss') ?? '') ? (params.get('boss') as InkId) : 'heuk';
-    game.debugRoom({ kind: 'boss', el, depth: CHAPTER.rooms - 1, seed: 4242 });
+    game.debugRoom({ kind: 'boss', el, chapter: DEBUG_CH, depth: CHAPTERS[DEBUG_CH].rooms - 1, seed: 4242 });
+    giveItems();
+  }
+  // 시험용: 곧장 장 사이의 정자로 (?rest&ch=1), 장의 첫 방으로 (?room&ch=1)
+  if (params.has('rest')) {
+    game.debugRoom({ kind: 'rest', el: null, chapter: Math.max(1, DEBUG_CH), depth: -1, seed: 31 });
+    giveItems();
+  }
+  if (params.has('room')) {
+    game.debugRoom({ kind: 'battle', el: 'jeok', chapter: DEBUG_CH, depth: Number(params.get('room')) || 0, seed: 32 });
     giveItems();
   }
   // 시험용: 곧장 문방으로 (?shop)
   if (params.has('shop')) {
-    game.debugRoom({ kind: 'shop', el: null, depth: 1, seed: 777 });
+    game.debugRoom({ kind: 'shop', el: null, chapter: DEBUG_CH, depth: 1, seed: 777 });
     giveItems();
   }
 
@@ -198,7 +210,7 @@ async function boot(): Promise<void> {
       if (p === 'reward') setTimeout(() => game.chooseReward(game.rewards[Math.floor(Math.random() * game.rewards.length)]), 600);
       if (p === 'over') setTimeout(() => game.startRun(), 2000);
     })(game.onPhase);
-    if (!params.has('boss')) game.startRun();
+    if (!params.has('boss') && !params.has('room') && !params.has('rest')) game.startRun();
   }
 
   /** 시험용: 시연 입력으로 게임을 빨리 감는다 */

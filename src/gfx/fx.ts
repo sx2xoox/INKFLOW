@@ -7,6 +7,7 @@ import { mulberry32 } from '../core/rng';
 import { INKS, inkColor } from '../ink';
 import type { Enemy, Gate, Player, Projectile, Ring, Trace, Zone } from '../game/types';
 import { LAND_R, SWIPE_HALF, SWIPE_REACH } from '../game/boss';
+import { BITE_LEN, BURST_R, SPIT_SPREAD, spitCount } from '../game/imugi';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, mix } from '../render/color';
 import { ROBE } from '../render/sprites';
@@ -276,6 +277,53 @@ export function drawTrace(sb: SB, tr: Trace): void {
         });
       }
       break;
+    }
+  }
+}
+
+/** 이무기의 다음 수 — 물어뜯을 줄, 뿜을 부채, 치솟을 자리 */
+export function drawImugiTells(sb: SB, e: Enemy, t: number): void {
+  const b = e.boss;
+  if (!b) return;
+  switch (b.move) {
+    case 'bite': {
+      if (b.t >= b.wind) return;
+      const k = clamp(b.t / b.wind, 0, 1);
+      const len = BITE_LEN;
+      const pts = [
+        { x: e.x, y: e.y },
+        { x: e.x + b.ax * len, y: e.y + b.ay * len },
+      ];
+      sb.stroke(pts, { width: 10 + 40 * k * k, color: TELL, alpha: 0.1 + 0.12 * k, dryness: 0.85, taperIn: 0.05, taperOut: 0.3, seed: e.seed + 31, progress: Math.min(1, k * 2) });
+      sb.stroke(pts, { width: 3, color: TELL, alpha: 0.35 + 0.45 * k, dryness: 0.55, taperIn: 0.1, taperOut: 0.3, seed: e.seed + 32, progress: Math.min(1, k * 2) });
+      return;
+    }
+    case 'spit': {
+      if (b.t >= b.wind) return;
+      const k = clamp(b.t / b.wind, 0, 1);
+      const n = spitCount(b);
+      const base = Math.atan2(b.ay, b.ax);
+      for (let i = 0; i < n; i++) {
+        const a = base + (n === 1 ? 0 : (i / (n - 1) - 0.5) * SPIT_SPREAD);
+        sb.stroke([{ x: e.x + Math.cos(a) * 30, y: e.y + Math.sin(a) * 30 }, { x: e.x + Math.cos(a) * 170, y: e.y + Math.sin(a) * 170 }], {
+          width: 3,
+          color: TELL,
+          alpha: 0.25 + 0.45 * k,
+          dryness: 0.65,
+          taperIn: 0.3,
+          taperOut: 0.7,
+          seed: e.seed + 40 + i,
+          progress: Math.min(1, k * 1.6),
+        });
+      }
+      return;
+    }
+    case 'burrow': {
+      const k = clamp(b.t / b.dur, 0, 1);
+      const pulse = 1 + 0.04 * Math.sin(t * 16);
+      ring(sb, b.tx, b.ty, BURST_R * pulse, 4.5, TELL, 0.3 + 0.5 * k, e.seed + 51, 0.55, 0.7, Math.min(1, k * 1.4));
+      ring(sb, b.tx, b.ty, BURST_R * 0.5 * k, 9 * k, TELL, 0.12 + 0.14 * k, e.seed + 52, 0.85, 0.7);
+      return;
     }
   }
 }

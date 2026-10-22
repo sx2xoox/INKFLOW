@@ -5,6 +5,7 @@ import {
   WALK_FRAMES,
   drawBlob,
   drawBrute,
+  drawCarp,
   drawDrop,
   drawGlow,
   drawInkWell,
@@ -14,11 +15,13 @@ import {
   drawSplat,
   drawSwallow,
   drawToad,
+  drawTurtle,
   drawWash,
   type SpriteDraw,
 } from '../render/sprites';
 import type { EnemyKind } from '../game/types';
 import { TIGER_FRAMES, type TigerPoseName, drawTiger } from '../render/tiger';
+import { drawImugiHead } from '../render/imugi';
 import { Atlas } from './atlas';
 
 export const BLOB_VARIANTS = 6;
@@ -39,11 +42,14 @@ interface EnemyArt {
   period: number;
 }
 
-export const ENEMY_ART: Record<Exclude<EnemyKind, 'tiger'>, EnemyArt> = {
+export const ENEMY_ART: Record<Exclude<EnemyKind, 'tiger' | 'imugi'>, EnemyArt> = {
   drop: { draw: drawDrop, w: 46, h: 52, ox: 23, oy: 46, period: 1.1 },
   swallow: { draw: drawSwallow, w: 72, h: 64, ox: 38, oy: 32, period: 0.34 },
   toad: { draw: drawToad, w: 84, h: 62, ox: 42, oy: 52, period: 1.6 },
   brute: { draw: drawBrute, w: 116, h: 120, ox: 58, oy: 110, period: 1.4 },
+  // 잉어와 거북은 0~5가 움직임, 6·7은 따로 고르는 자세
+  carp: { draw: drawCarp, w: 76, h: 64, ox: 38, oy: 52, period: 0.7 },
+  turtle: { draw: drawTurtle, w: 72, h: 50, ox: 34, oy: 42, period: 1.3 },
 };
 
 /** 묵호 그림 상자 — 치켜든 앞발과 꼬리까지 들어가게 */
@@ -67,6 +73,13 @@ export function tigerAtlas(): Atlas {
   return at;
 }
 
+/** 이무기 머리 — 먹마다, 입을 다문 것과 벌린 것 */
+export const IMUGI_HEAD = { w: 156, h: 105, ox: 45, oy: 57 };
+/** 머리를 몸통 굵기에 맞게 키워서 굽는다 */
+const IMUGI_SCALE = 1.5;
+export const imugiFrame = (el: InkId, open: boolean): string => `imugi/${el}/${open ? 1 : 0}`;
+export const imugiWhite = (open: boolean): string => `imugi/white/${open ? 1 : 0}`;
+
 export const enemyFrame = (kind: keyof typeof ENEMY_ART, el: InkId, f: number): string => `enemy/${kind}/${el}/${f}`;
 export const enemyWhite = (kind: keyof typeof ENEMY_ART, f: number): string => `enemy/${kind}/white/${f}`;
 
@@ -85,6 +98,28 @@ export function buildAtlas(): Atlas {
       }
       at.add(enemyWhite(kind, f), art.w, art.h, art.ox, art.oy, (c) => art.draw(c, f, INKS.heuk.color, INKS.heuk.edge, 100 + f), 'white');
     }
+  }
+  for (const open of [false, true]) {
+    const H = IMUGI_HEAD;
+    for (const el of INK_ORDER) {
+      const d = INKS[el];
+      at.add(imugiFrame(el, open), H.w, H.h, H.ox, H.oy, (c) => {
+        c.scale(IMUGI_SCALE, IMUGI_SCALE);
+        drawImugiHead(c, open ? 1 : 0, d.color, d.edge);
+      });
+    }
+    at.add(
+      imugiWhite(open),
+      H.w,
+      H.h,
+      H.ox,
+      H.oy,
+      (c) => {
+        c.scale(IMUGI_SCALE, IMUGI_SCALE);
+        drawImugiHead(c, open ? 1 : 0, INKS.heuk.color, INKS.heuk.edge);
+      },
+      'white',
+    );
   }
   for (const el of INK_ORDER) {
     const d = INKS[el];
