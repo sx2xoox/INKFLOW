@@ -12,7 +12,8 @@ import { View } from './gfx/view';
 import { ResolutionGovernor } from './gfx/governor';
 import { EXCESS_COST, INK_ORDER, type InkId, inkName } from './ink';
 import { CHARACTERS } from './game/characters';
-import { CHAPTERS, ROOM_KINDS } from './game/rooms';
+import { CHAPTERS, ROOM_KINDS, bossDesc, chapterDone, chapterRoad } from './game/rooms';
+import { josa } from './core/hangul';
 import { ARTIFACT_LIST, type ArtifactId } from './game/artifacts';
 import { Input } from './input';
 import { UI } from './ui';
@@ -26,7 +27,7 @@ const DEMO = params.has('demo');
 /** 그림 점검용 진열장 */
 const GALLERY = params.get('gallery');
 /** 시험용 방이 몇 번째 장에 있는지 (?ch=1) */
-const DEBUG_CH = Math.max(0, Math.min(1, Number(params.get('ch')) || 0));
+const DEBUG_CH = Math.max(0, Math.min(CHAPTERS.length - 1, Number(params.get('ch')) || 0));
 /** 해상도를 고정해서 볼 때 (?res=1.5) */
 const FORCED_RES = Number(params.get('res')) || 0;
 
@@ -43,7 +44,9 @@ function canvasGlyphs(): string {
     '방 문이 열리다 문에 적힌 먹과 방을 보고 길을 고른다 문을 골라 지나간다 남은 무리',
     '한 폭을 그려 내다 낙관을 찍는다 샘에 다가가 먹을 씻는다 화첩을 덮는다 다 그리다 마지막 문을 지나',
     '一二三四五六七八終 어귀 정자에서 숨을 고른다 — 샘과 서안을 들르고 문을 고른다 병풍을 다 그리다 로 가는 문이 열린다',
-    ...CHAPTERS.flatMap((c) => [c.name, c.hanja, c.boss.name, c.boss.hanja, c.boss.title, `${c.boss.title}을 그려 내다`, `${c.boss.title} ${c.boss.name}와 맞선다`]),
+    ...CHAPTERS.flatMap((c) => [c.name, c.hanja, c.boss.name, c.boss.hanja, c.boss.title, `${josa(c.boss.title, '을/를')} 그려 내다`, bossDesc(c), chapterDone(c), chapterRoad(c), josa(c.boss.name, '이/가')]),
+    '봉황 · 산사의 주인 鳳 · 산사의 주인이 날개를 편다 봉황이 떨어지다 종소리에 날개가 꺾였다 — 지금이 틈',
+    '범종 — 붓으로 치면 종소리가 먹귀를 굳힌다 鐘 裂 石 甲 빼앗기다 먹을 되찾다',
     '묵호 · 대숲의 주인 墨虎 · 대숲의 주인이 내려온다 을 두르다 묵호가 먹으로 갈아입는다 — 먹이 이긴다',
     '대숲의 주인을 그려 내다 의 마지막 폭에 낙관을 찍는다',
     '太過 상극 ×1.8 약점 없음 이 넘치다 약점이 사라진다 대가: 지닌 물건 서안 — 물건을 본다 서안에 다가가 물건을 본다 문방에서 물건을 고르다',
@@ -251,7 +254,7 @@ function demoInput(g: Game, t: number): InputFrame {
   }
   let mx = (cx - pl.x) / 120;
   let my = (cy - pl.y) / 120;
-  if (best < 70) {
+  if (best < 70 && best > 0.5) {
     mx -= (target.x - pl.x) / best;
     my -= (target.y - pl.y) / best;
   }

@@ -4,10 +4,11 @@
  */
 import { type Vec, TAU } from '../core/math';
 import { type Rng, mulberry32 } from '../core/rng';
-import { CHAPTERS, ENTRANCE, type Obstacle, type RoomDef, type RoomLayout, WALL_TOP, type Water } from '../game/rooms';
+import { BELL_HANG, CHAPTERS, ENTRANCE, type Obstacle, type RoomDef, type RoomLayout, WALL_TOP, type Water } from '../game/rooms';
 import { arcPoints, brushStroke, dot, inkBlob, wash } from './brush';
 import { type RGB, DAMMUK, INK, PAPER, PAPER_LIGHT, mix, rgba } from './color';
 import { createPaperCanvas } from './paper';
+import { MAPLE, mapleLeaf, paintBellPavilion, paintChrysanthemum, paintCourtyard, paintDancheong, paintFlagPath, paintMaple, paintPagoda, paintPhoenixSigns } from './temple';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -33,12 +34,23 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
   };
 
   const lotus = CHAPTERS[def.chapter].id === 'lotus';
-  // 떨어진 잎 — 대숲은 댓잎, 연못은 가는 버들잎
-  for (let i = 0; i < 70; i++) {
+  const temple = CHAPTERS[def.chapter].id === 'temple';
+  if (temple) {
+    // 산사 — 입구에서 담장 가운데로 박석 길, 주인의 방은 너른 박석 마당
+    const skip = (x: number, y: number): boolean => blocked(x, y, -10) && Math.hypot(x - ENTRANCE.x, y - ENTRANCE.y) > 120;
+    if (def.kind === 'boss') paintCourtyard(ctx, w / 2, h / 2 + 50, 560, 300, rng, skip);
+    else paintFlagPath(ctx, w / 2, WALL_TOP + 10, h - 30, range(rng, 70, 90), rng, skip);
+  }
+  // 떨어진 잎 — 대숲은 댓잎, 연못은 가는 버들잎, 산사는 단풍잎
+  for (let i = 0; i < (temple ? 90 : 70); i++) {
     const x = range(rng, 60, w - 60);
     const y = range(rng, WALL_TOP + 30, h - 50);
     if (blocked(x, y, 0)) continue;
     const a = rng() * TAU;
+    if (temple) {
+      mapleLeaf(ctx, x, y, range(rng, 5, 8), MAPLE[Math.floor(rng() * MAPLE.length)], a, range(rng, 0.45, 0.75), Math.floor(rng() * 1e6));
+      continue;
+    }
     const l = range(rng, 7, 13) * (lotus ? 0.8 : 1);
     brushStroke(ctx, [{ x, y }, { x: x + Math.cos(a) * l, y: y + Math.sin(a) * l * 0.6 }], {
       width: range(rng, 2.4, 3.6) * (lotus ? 0.7 : 1),
@@ -50,8 +62,8 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
       seed: Math.floor(rng() * 1e6),
     });
   }
-  // 풀 — 연못에는 갈대가 섞인다
-  for (let i = 0; i < 55; i++) {
+  // 풀 — 연못에는 갈대가 섞인다. 산사는 풀이 성기다
+  for (let i = 0; i < (temple ? 28 : 55); i++) {
     const x = range(rng, 60, w - 60);
     const y = range(rng, WALL_TOP + 40, h - 50);
     if (blocked(x, y, 10)) continue;
@@ -66,26 +78,28 @@ export function createRoomCanvas(w: number, h: number, def: RoomDef, layout: Roo
       paintReeds(ctx, water.x + Math.cos(a) * (water.rx + 6), water.y + Math.sin(a) * (water.ry + 4), range(rng, 0.8, 1.25), rng);
     }
   }
-  // 난초 몇 포기
-  for (let i = 0; i < 4; i++) {
+  // 난초 몇 포기 — 산사에는 국화
+  for (let i = 0; i < (temple ? 6 : 4); i++) {
     const x = range(rng, 120, w - 120);
     const y = range(rng, WALL_TOP + 120, h - 80);
     if (blocked(x, y, 60) || Math.hypot(x - w / 2, (y - h / 2) * 1.4) < 200) continue;
-    paintOrchid(ctx, x, y, range(rng, 0.75, 1.1), rng);
+    if (temple) paintChrysanthemum(ctx, x, y, range(rng, 0.85, 1.2), rng);
+    else paintOrchid(ctx, x, y, range(rng, 0.75, 1.1), rng);
   }
 
   if (layout.pond) paintPond(ctx, layout.pond.x, layout.pond.y, layout.pond.r, rng);
-  if (def.kind === 'boss') paintTigerSigns(ctx, w, h, rng, blocked);
+  if (def.kind === 'boss' && CHAPTERS[def.chapter].id === 'bamboo') paintTigerSigns(ctx, w, h, rng, blocked);
+  if (def.kind === 'boss' && temple) paintPhoenixSigns(ctx, w, h, rng, blocked);
   if (layout.desk) paintDesk(ctx, layout.desk.x, layout.desk.y, rng);
   paintSteppingStones(ctx, w, h, rng);
-  paintWall(ctx, w, rng);
+  paintWall(ctx, w, rng, temple);
   paintBorder(ctx, w, h, rng);
   return c;
 }
 
 /* ───────── 담장 ───────── */
 
-function paintWall(ctx: Ctx, w: number, rng: Rng): void {
+function paintWall(ctx: Ctx, w: number, rng: Rng, temple: boolean): void {
   const roofY = 58;
   const base = WALL_TOP - 8;
   // 담 몸통 — 옅은 먹으로 돌을 쌓는다
@@ -131,6 +145,8 @@ function paintWall(ctx: Ctx, w: number, rng: Rng): void {
     }
     return pts;
   };
+  // 산사의 담은 처마 밑에 단청을 둘렀다
+  if (temple) paintDancheong(ctx, w, roofY + 10, 11, rng);
   brushStroke(ctx, roof(roofY - 14, 10), { width: 9, color: INK, alpha: 0.85, dryness: 0.45, taperIn: 0.02, taperOut: 0.02, seed: 21 });
   brushStroke(ctx, roof(roofY + 2, 12), { width: 14, color: mix(INK, DAMMUK, 0.4), alpha: 0.7, dryness: 0.55, taperIn: 0.02, taperOut: 0.02, seed: 22 });
   for (let x = 6; x < w; x += 17) {
@@ -618,13 +634,30 @@ export interface ObstacleArt {
   scale: number;
 }
 
+/** 장애물 그림 상자 — 가로, 세로, 바닥 중심의 높이(아래에서) */
+function obstacleBox(o: Obstacle): [number, number, number] {
+  switch (o.kind) {
+    case 'rock':
+      return [o.r * 2.9, o.r * 2.6, o.r * 0.9];
+    case 'willow':
+      return [o.r * 2 + 230, 330, 34];
+    case 'pagoda':
+      return [o.r * 2 + 70, 200, 30];
+    case 'maple':
+      return [o.r * 2 + 230, 300, 34];
+    case 'bell':
+      return [230, BELL_HANG + 100, 34];
+    default:
+      return [o.r * 2 + 170, 300, 34];
+  }
+}
+
 export function paintObstacle(o: Obstacle, scale: number): ObstacleArt {
   const isRock = o.kind === 'rock';
   const willow = o.kind === 'willow';
-  const w = isRock ? o.r * 2.9 : willow ? o.r * 2 + 230 : o.r * 2 + 170;
-  const h = isRock ? o.r * 2.6 : willow ? 330 : 300;
+  const [w, h, below] = obstacleBox(o);
   const ox = w / 2;
-  const oy = isRock ? h - o.r * 0.9 : h - 34;
+  const oy = h - below;
   const c = document.createElement('canvas');
   c.width = Math.ceil(w * scale);
   c.height = Math.ceil(h * scale);
@@ -634,6 +667,9 @@ export function paintObstacle(o: Obstacle, scale: number): ObstacleArt {
   const rng = mulberry32(o.seed);
   if (isRock) paintBoulder(ctx, o.r, rng, o.seed);
   else if (willow) paintWillow(ctx, o.r, rng, o.seed);
+  else if (o.kind === 'pagoda') paintPagoda(ctx, o.r, rng, o.seed);
+  else if (o.kind === 'maple') paintMaple(ctx, o.r, rng, o.seed);
+  else if (o.kind === 'bell') paintBellPavilion(ctx, o.r, BELL_HANG, rng, o.seed);
   else paintBambooClump(ctx, o.r, rng, o.seed);
   return { canvas: c, ax: ox / w, ay: oy / h, scale };
 }

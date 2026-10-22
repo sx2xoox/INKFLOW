@@ -5,9 +5,11 @@
 import { type Vec, TAU, clamp, easeOutCubic, lerp } from '../core/math';
 import { mulberry32 } from '../core/rng';
 import { INKS, inkColor } from '../ink';
-import type { Enemy, Gate, Player, Projectile, Ring, Trace, Zone } from '../game/types';
+import type { Bell, Enemy, Gate, Player, Projectile, Ring, Trace, Zone } from '../game/types';
 import { LAND_R, SWIPE_HALF, SWIPE_REACH } from '../game/boss';
 import { BITE_LEN, BURST_R, SPIT_SPREAD, spitCount } from '../game/imugi';
+import { FOX_APPEAR, LION_AIM, lionCracked } from '../game/enemies';
+import { GUST_BEATS, PLUNGE_R, PLUNGE_WIND, SWEEP_HALF, VOLLEY_SPREAD, volleyCount } from '../game/phoenix';
 import { arcPoints } from '../render/brush';
 import { type RGB, DAMMUK, INK, mix } from '../render/color';
 import { ROBE } from '../render/sprites';
@@ -330,6 +332,127 @@ export function drawImugiTells(sb: SB, e: Enemy, t: number): void {
 
 /** 붉은 먹으로 미리 그려 보이는 묵호의 다음 수 */
 const TELL: RGB = [172, 50, 38];
+
+/** 산사의 먹귀 — 여우가 물 쪽, 돌사자가 내달을 줄 */
+export function drawTempleTells(sb: SB, e: Enemy): void {
+  if (e.kind === 'fox' && e.ai === 2) {
+    const k = clamp(1 - e.aiT / FOX_APPEAR, 0, 1);
+    const pts = [
+      { x: e.x + e.tx * 14, y: e.y - 8 + e.ty * 14 },
+      { x: e.x + e.tx * 104, y: e.y - 8 + e.ty * 104 },
+    ];
+    sb.stroke(pts, { width: 4 + 18 * k, color: TELL, alpha: 0.1 + 0.12 * k, dryness: 0.8, taperIn: 0.1, taperOut: 0.5, seed: e.seed + 1, progress: Math.min(1, k * 2.2) });
+    sb.stroke(pts, { width: 2.6, color: TELL, alpha: 0.4 + 0.45 * k, dryness: 0.5, taperIn: 0.1, taperOut: 0.6, seed: e.seed + 2, progress: Math.min(1, k * 2.2) });
+    ring(sb, e.x, e.y, 22, 2.4, TELL, 0.5 * (1 - k * 0.5), e.seed + 3, 0.5, 0.55);
+  }
+  if (e.kind === 'lion' && e.ai === 2) {
+    const k = clamp(1 - e.aiT / LION_AIM, 0, 1);
+    const len = 520;
+    const pts = [
+      { x: e.x, y: e.y },
+      { x: e.x + Math.cos(e.face) * len, y: e.y + Math.sin(e.face) * len },
+    ];
+    sb.stroke(pts, { width: 6 + 30 * k * k, color: TELL, alpha: 0.1 + 0.12 * k, dryness: 0.85, taperIn: 0.05, taperOut: 0.4, seed: e.seed + 5, progress: Math.min(1, k * 2) });
+    sb.stroke(pts, { width: 3, color: TELL, alpha: 0.35 + 0.45 * k, dryness: 0.55, taperIn: 0.1, taperOut: 0.5, seed: e.seed + 6, progress: Math.min(1, k * 2) });
+  }
+}
+
+/** 봉황의 다음 수 — 깃털 부채, 내리꽂힐 원, 활공할 띠, 날개 바람 */
+export function drawPhoenixTells(sb: SB, e: Enemy, t: number): void {
+  const b = e.boss;
+  if (!b) return;
+  switch (b.move) {
+    case 'volley': {
+      if (b.t >= b.wind) return;
+      const k = clamp(b.t / b.wind, 0, 1);
+      const n = volleyCount(b);
+      const base = Math.atan2(b.ay, b.ax) + (b.chain % 2 === 0 ? 0.5 / n : 0);
+      for (let i = 0; i < n; i++) {
+        const a = base + (n === 1 ? 0 : (i / (n - 1) - 0.5) * VOLLEY_SPREAD);
+        sb.stroke([{ x: e.x + Math.cos(a) * 40, y: e.y + Math.sin(a) * 40 }, { x: e.x + Math.cos(a) * 200, y: e.y + Math.sin(a) * 200 }], {
+          width: 3,
+          color: TELL,
+          alpha: 0.22 + 0.45 * k,
+          dryness: 0.65,
+          taperIn: 0.3,
+          taperOut: 0.7,
+          seed: e.seed + 40 + i,
+          progress: Math.min(1, k * 1.6),
+        });
+      }
+      return;
+    }
+    case 'soar':
+    case 'plunge': {
+      if (b.move === 'soar' && b.t < b.dur * 0.55) return;
+      const k = b.move === 'soar' ? 0.15 * clamp((b.t - b.dur * 0.55) / (b.dur * 0.45), 0, 1) : clamp(b.t / PLUNGE_WIND, 0, 1);
+      const x = b.move === 'soar' ? e.x : b.tx;
+      const y = b.move === 'soar' ? e.y : b.ty;
+      const pulse = 1 + 0.03 * Math.sin(t * 18);
+      ring(sb, x, y, PLUNGE_R * pulse, 4.5, TELL, 0.25 + 0.5 * k, e.seed + 11, 0.55, 0.7, Math.min(1, 0.3 + k * 1.4));
+      ring(sb, x, y, PLUNGE_R * 0.55 * k, 9 * k, TELL, 0.12 + 0.12 * k, e.seed + 12, 0.85, 0.7);
+      return;
+    }
+    case 'climb':
+    case 'sweep': {
+      if (b.move === 'sweep' && b.t >= b.wind) return;
+      const k = b.move === 'climb' ? 0.25 * clamp(b.t / b.dur, 0, 1) : 0.25 + 0.75 * clamp(b.t / b.wind, 0, 1);
+      const pts = [
+        { x: b.sx, y: b.sy },
+        { x: b.tx, y: b.ty },
+      ];
+      sb.stroke(pts, { width: SWEEP_HALF * 2 * (0.6 + 0.4 * k), color: TELL, alpha: 0.08 + 0.12 * k, dryness: 0.85, wet: 0.5, taperIn: 0.05, taperOut: 0.05, seed: e.seed + 21, progress: Math.min(1, k * 1.8) });
+      sb.stroke(pts, { width: 3, color: TELL, alpha: 0.25 + 0.5 * k, dryness: 0.55, taperIn: 0.1, taperOut: 0.2, seed: e.seed + 22, progress: Math.min(1, k * 1.8) });
+      // 갈 쪽을 가리키는 꺾쇠
+      const len = Math.hypot(b.tx - b.sx, b.ty - b.sy) || 1;
+      const ux = (b.tx - b.sx) / len;
+      const uy = (b.ty - b.sy) / len;
+      for (let i = 1; i <= 4; i++) {
+        const q = (i / 5) * Math.min(1, k * 1.8);
+        const cx = b.sx + (b.tx - b.sx) * q;
+        const cy = b.sy + (b.ty - b.sy) * q;
+        sb.stroke(
+          [
+            { x: cx - ux * 14 - uy * 16, y: cy - uy * 14 + ux * 16 },
+            { x: cx, y: cy },
+            { x: cx - ux * 14 + uy * 16, y: cy - uy * 14 - ux * 16 },
+          ],
+          { width: 3, color: TELL, alpha: 0.3 + 0.4 * k, dryness: 0.5, taperIn: 0.2, taperOut: 0.2, seed: e.seed + 30 + i },
+        );
+      }
+      return;
+    }
+    case 'gust': {
+      // 바람 — 다치지는 않으니 붉지 않게, 담묵의 결로
+      for (const at of GUST_BEATS) {
+        const k = clamp(1 - Math.abs(b.t - at) / 0.35, 0, 1);
+        if (k <= 0) continue;
+        for (let j = 0; j < 3; j++) {
+          const r = 60 + j * 50 + (b.t - at + 0.35) * 260;
+          ring(sb, e.x, e.y - b.z * 0.3, r, 3, DAMMUK, 0.35 * k * (1 - j * 0.25), e.seed + 60 + j, 0.8, 0.6, 0.45);
+        }
+      }
+      return;
+    }
+  }
+}
+
+/** 범종의 울림 — 종 둘레로 번지는 소리의 결, 다시 칠 수 있을 때까지 차오르는 고리 */
+export function drawBell(sb: SB, b: Bell, hang: number, cd: number, t: number): void {
+  const bronze: RGB = [120, 112, 80];
+  if (b.hum > 0.01) {
+    for (let j = 0; j < 3; j++) {
+      const ph = (t * 1.4 + j / 3) % 1;
+      ring(sb, b.x, b.y - hang * 0.4, 40 + ph * 170, 2.6, bronze, b.hum * (1 - ph) * 0.55, 77 + j, 0.6, 0.75);
+    }
+  }
+  if (b.cd > 0) {
+    const k = 1 - b.cd / cd;
+    sb.stroke(arcPoints(b.x, b.y + 6, 62, -Math.PI / 2, TAU * k, 30, 62, 0.42), { width: 3, color: bronze, alpha: 0.45, dryness: 0.5, taperIn: 0.05, taperOut: 0.05, seed: 91 });
+  } else {
+    ring(sb, b.x, b.y + 6, 62 + Math.sin(t * 3) * 2, 2.4, bronze, 0.4 + 0.15 * Math.sin(t * 3), 92, 0.4, 0.42);
+  }
+}
 
 export function drawTigerTells(sb: SB, e: Enemy, t: number): void {
   const b = e.boss;
@@ -681,6 +804,20 @@ export function drawProjectile(sb: SB, p: Projectile): void {
       if (p.trail.length > 2) sb.stroke(p.trail, { width: p.r * 1.2, color: inkColor(p.ink), alpha: 0.35, dryness: 0.3, wet: 0.6, taperIn: 0.9, taperOut: 0.05, seed: p.seed });
       break;
     }
+    case 'feather': {
+      // 깃털 — 깃대를 따라 깃이 갈라진다
+      const col = inkColor(p.ink);
+      const a = Math.min(1, life * 4);
+      const ux = Math.cos(ang);
+      const uy = Math.sin(ang);
+      const tip = { x: p.x + ux * 12, y: p.y + uy * 12 };
+      const tail = { x: p.x - ux * 16, y: p.y - uy * 16 };
+      const flutter = Math.sin(p.life * 30 + p.seed) * 2;
+      if (p.trail.length > 2) sb.stroke(p.trail, { width: 5, color: col, alpha: a * 0.22, dryness: 0.6, taperIn: 0.9, taperOut: 0.1, seed: p.seed + 3 });
+      inkStroke(sb, [tail, { x: p.x - uy * flutter, y: p.y + ux * flutter }, tip], { width: 10, color: col, alpha: a, dryness: 0.35, taperIn: 0.5, taperOut: 0.6, seed: p.seed + 1, edgeInk: 0.6 }, p.ink);
+      sb.stroke([{ x: tail.x - ux * 5, y: tail.y - uy * 5 }, tip], { width: 1.4, color: INK, alpha: a * 0.85, dryness: 0.2, taperIn: 0.1, taperOut: 0.7, seed: p.seed + 2 });
+      break;
+    }
   }
 }
 
@@ -712,7 +849,17 @@ export function drawStatus(sb: SB, e: Enemy, time: number): void {
       leaf(sb, pts[12], -Math.PI / 2 + (k ? -0.7 : 0.7), 7, INKS.cheong.color, a, e.seed + 70 + k);
     }
   }
-  if (e.stunT > 0) {
+  // 여우가 물고 간 먹 — 꼬리 위에 매달려 흔들린다
+  if (e.carry) {
+    const bob = Math.sin(time * 6 + e.seed) * 2;
+    const x = e.x - e.side * 22;
+    const y = e.y - 34 + bob;
+    const c = inkColor(e.carry.ink);
+    sb.stroke(arcPoints(x, y, 3.6, 0, TAU * 1.05, 12), { width: 8.5, color: c, alpha: 0.95, dryness: 0, wet: 0.5, taperIn: 0, taperOut: 0, edgeInk: 0.2, seed: e.seed + 77 });
+    if (e.carry.ink === 'baek') ring(sb, x, y, 7.6, 1.4, DAMMUK, 0.7, e.seed + 79, 0.3, 1);
+    ring(sb, x, y, 10 + Math.sin(time * 8) * 1.2, 1.6, c === INKS.baek.color ? DAMMUK : c, 0.6, e.seed + 78, 0.4, 1);
+  }
+  if (e.stunT > 0 || lionCracked(e)) {
     const col = mix(INKS.hwang.color, INK, 0.2);
     for (let i = 0; i < 3; i++) {
       const ang = time * 5 + (i / 3) * TAU;

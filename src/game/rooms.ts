@@ -4,6 +4,7 @@
  * 문에 적힌 먹 색과 방 종류를 보고 다음 길을 고른다.
  * 장의 마지막 방에는 그 장의 주인이 있고, 주인을 넘기면 정자에서 숨을 고른 뒤 다음 장으로 간다.
  */
+import { josa } from '../core/hangul';
 import type { Vec } from '../core/math';
 import { type Rng, mulberry32, randomSeed } from '../core/rng';
 import { INK_ORDER, type InkId } from '../ink';
@@ -39,17 +40,20 @@ export const ROOM_KINDS: Record<RoomKind, RoomKindInfo> = {
 };
 
 export interface ChapterDef {
-  id: 'bamboo' | 'lotus';
+  id: 'bamboo' | 'lotus' | 'temple';
   name: string;
   hanja: string;
   /** 방 개수 — 마지막 방은 주인, 그 앞 방에는 정예의 문이 하나 끼어 있다 */
   rooms: number;
   boss: { kind: EnemyKind; name: string; hanja: string; title: string };
+  /** 이 장에서 새로 나오는 먹귀 — 버티기 방에도 섞인다 */
+  kin: EnemyKind[];
 }
 
 export const CHAPTERS: readonly ChapterDef[] = [
-  { id: 'bamboo', name: '대숲', hanja: '竹', rooms: 7, boss: { kind: 'tiger', name: '묵호', hanja: '虎', title: '대숲의 주인' } },
-  { id: 'lotus', name: '연못', hanja: '蓮', rooms: 7, boss: { kind: 'imugi', name: '이무기', hanja: '螭', title: '연못의 주인' } },
+  { id: 'bamboo', name: '대숲', hanja: '竹', rooms: 7, boss: { kind: 'tiger', name: '묵호', hanja: '虎', title: '대숲의 주인' }, kin: [] },
+  { id: 'lotus', name: '연못', hanja: '蓮', rooms: 7, boss: { kind: 'imugi', name: '이무기', hanja: '螭', title: '연못의 주인' }, kin: ['carp', 'turtle'] },
+  { id: 'temple', name: '산사', hanja: '寺', rooms: 7, boss: { kind: 'phoenix', name: '봉황', hanja: '鳳', title: '산사의 주인' }, kin: ['fox', 'lion'] },
 ];
 
 /** 한 판의 방 수 (장 사이의 정자는 세지 않는다) */
@@ -64,8 +68,13 @@ export function stageOf(def: RoomDef): number {
 
 /** 문과 장막에 쓰는 글자 — 주인의 방은 그 장 주인의 글자 */
 export const roomGlyph = (def: RoomDef): string => (def.kind === 'boss' ? CHAPTERS[def.chapter].boss.hanja : ROOM_KINDS[def.kind].hanja);
-export const roomDesc = (def: RoomDef): string =>
-  def.kind === 'boss' ? `${CHAPTERS[def.chapter].boss.title} ${CHAPTERS[def.chapter].boss.name}와 맞선다` : ROOM_KINDS[def.kind].desc;
+export const roomDesc = (def: RoomDef): string => (def.kind === 'boss' ? bossDesc(CHAPTERS[def.chapter]) : ROOM_KINDS[def.kind].desc);
+/** 「대숲을 다 그리다」「산사를 다 그리다」 */
+export const chapterDone = (ch: ChapterDef): string => `${josa(ch.name, '을/를')} 다 그리다`;
+/** 「연못(蓮)으로」「산사(寺)로」 */
+export const chapterRoad = (ch: ChapterDef): string => `${ch.name}(${ch.hanja})${josa(ch.name, '으로/로').slice(ch.name.length)}`;
+/** 「대숲의 주인 묵호와 맞선다」 */
+export const bossDesc = (ch: ChapterDef): string => `${ch.boss.title} ${josa(ch.boss.name, '와/과')} 맞선다`;
 /** 방 이름표 — 「대숲 · 셋째 방」, 정자는 「연못 어귀」 */
 export const roomTitle = (def: RoomDef, numeral: (n: number) => string): string =>
   def.kind === 'rest' ? `${CHAPTERS[def.chapter].name} 어귀` : `${CHAPTERS[def.chapter].name} · ${numeral(def.depth + 1)} 방`;
@@ -78,7 +87,7 @@ export const GATE_R = 46;
 /** 방에 들어서는 자리 */
 export const ENTRANCE: Vec = { x: WORLD_W / 2, y: WORLD_H - 130 };
 
-export type ObstacleKind = 'rock' | 'bamboo' | 'willow';
+export type ObstacleKind = 'rock' | 'bamboo' | 'willow' | 'pagoda' | 'maple' | 'bell';
 
 export interface Obstacle {
   kind: ObstacleKind;
@@ -99,7 +108,13 @@ export interface RoomLayout {
   desk: { x: number; y: number; r: number } | null;
   /** 연못의 물 — 들어서면 걸음이 무거워지고, 잉어는 빨라진다 */
   waters: Water[];
+  /** 산사의 범종 — 붓으로 치면 종소리가 퍼진다. 장애물 목록에도 들어 있다 */
+  bells: Obstacle[];
 }
+
+/** 범종이 걸린 높이 — 종각 대들보에서 종의 가운데까지 */
+export const BELL_HANG = 142;
+export const BELL_MID = 100;
 
 export interface Water {
   x: number;
@@ -116,8 +131,14 @@ const range = (rng: Rng, a: number, b: number): number => a + rng() * (b - a);
 export function makeLayout(def: RoomDef): RoomLayout {
   const rng = mulberry32(def.seed);
   const obstacles: Obstacle[] = [];
-  const lotus = CHAPTERS[def.chapter].id === 'lotus';
-  if (def.kind === 'boss') return lotus ? lotusArena(rng) : { obstacles: arenaEdge(rng), pond: null, desk: null, waters: [] };
+  const chId = CHAPTERS[def.chapter].id;
+  const lotus = chId === 'lotus';
+  const temple = chId === 'temple';
+  if (def.kind === 'boss') {
+    if (lotus) return lotusArena(rng);
+    if (temple) return templeArena(rng);
+    return { obstacles: arenaEdge(rng), pond: null, desk: null, waters: [], bells: [] };
+  }
   const rest = def.kind === 'rest';
   const pond = def.kind === 'spring' ? { x: WORLD_W / 2, y: WORLD_H / 2 + 40, r: 120 } : rest ? { x: WORLD_W / 2 - 270, y: WORLD_H / 2 + 60, r: 105 } : null;
   const desk = def.kind === 'shop' ? { x: WORLD_W / 2, y: WORLD_H / 2 + 10, r: 95 } : rest ? { x: WORLD_W / 2 + 270, y: WORLD_H / 2 + 40, r: 95 } : null;
@@ -134,10 +155,21 @@ export function makeLayout(def: RoomDef): RoomLayout {
       waters.push(w);
     }
   }
+  // 산사의 싸우는 방에는 종각이 하나 — 왼쪽이나 오른쪽 가장자리 가까이
+  const bells: Obstacle[] = [];
+  if (temple && fightRoom) {
+    const side = rng() < 0.5 ? -1 : 1;
+    const x = WORLD_W / 2 + side * range(rng, 440, 560);
+    const y = range(rng, WALL_TOP + 230, WORLD_H - 300);
+    const bell: Obstacle = { kind: 'bell', x, y, r: 40, seed: Math.floor(rng() * 1e6) };
+    bells.push(bell);
+    obstacles.push(bell);
+  }
 
-  for (let tries = 0; obstacles.length < count && tries < 400; tries++) {
-    const kind: ObstacleKind = rng() < 0.45 ? (lotus ? 'willow' : 'bamboo') : 'rock';
-    const r = kind === 'rock' ? range(rng, 36, 60) : range(rng, 34, 46);
+  for (let tries = 0; obstacles.length < count + bells.length && tries < 400; tries++) {
+    const tree: ObstacleKind = lotus ? 'willow' : temple ? (rng() < 0.55 ? 'maple' : 'pagoda') : 'bamboo';
+    const kind: ObstacleKind = rng() < (temple ? 0.6 : 0.45) ? tree : 'rock';
+    const r = kind === 'rock' ? range(rng, 36, 60) : kind === 'pagoda' ? range(rng, 30, 36) : range(rng, 34, 46);
     const x = range(rng, WALL + 90, WORLD_W - WALL - 90);
     const y = range(rng, WALL_TOP + 110, WORLD_H - WALL - 90);
     if (Math.hypot(x - ENTRANCE.x, y - ENTRANCE.y) < 200) continue;
@@ -146,10 +178,30 @@ export function makeLayout(def: RoomDef): RoomLayout {
     if (pond && Math.hypot(x - pond.x, y - pond.y) < pond.r + 150) continue;
     if (desk && Math.hypot(x - desk.x, y - desk.y) < desk.r + 150) continue;
     if (waters.some((w) => Math.hypot((x - w.x) / (w.rx + r + 40), (y - w.y) / (w.ry + r + 30)) < 1)) continue;
-    if (obstacles.some((o) => Math.hypot(x - o.x, (y - o.y) / OBSTACLE_SQUASH) < r + o.r + 110)) continue;
+    if (obstacles.some((o) => Math.hypot(x - o.x, (y - o.y) / OBSTACLE_SQUASH) < r + o.r + (o.kind === 'bell' ? 170 : 110))) continue;
     obstacles.push({ kind, x, y, r, seed: Math.floor(rng() * 1e6) });
   }
-  return { obstacles, pond, desk, waters };
+  return { obstacles, pond, desk, waters, bells };
+}
+
+/**
+ * 산사의 주인의 방 — 박석을 깐 너른 마당. 양쪽 아래에 종각이 하나씩 서 있고,
+ * 위쪽 모서리에는 석탑과 단풍나무. 봉황은 담장 용마루에 앉아 있다 내려온다.
+ */
+function templeArena(rng: Rng): RoomLayout {
+  const obstacles: Obstacle[] = [];
+  const spots: [number, number, ObstacleKind][] = [
+    [WALL + 120, WALL_TOP + 140, 'maple'],
+    [WORLD_W - WALL - 120, WALL_TOP + 140, 'pagoda'],
+    [WALL + 100, WORLD_H - WALL - 130, 'rock'],
+    [WORLD_W - WALL - 100, WORLD_H - WALL - 130, 'maple'],
+  ];
+  for (const [x, y, kind] of spots) {
+    obstacles.push({ kind, x: x + range(rng, -20, 20), y: y + range(rng, -20, 20), r: kind === 'pagoda' ? 34 : range(rng, 38, 46), seed: Math.floor(rng() * 1e6) });
+  }
+  const bells: Obstacle[] = [-1, 1].map((s) => ({ kind: 'bell' as const, x: WORLD_W / 2 + s * 470, y: WORLD_H / 2 + 120 + range(rng, -20, 20), r: 40, seed: Math.floor(rng() * 1e6) }));
+  obstacles.push(...bells);
+  return { obstacles, pond: null, desk: null, waters: [], bells };
 }
 
 /** 연못의 주인의 방 — 가운데에 큰 못이 있고, 버드나무와 바위가 둘레를 두른다 */
@@ -164,7 +216,7 @@ function lotusArena(rng: Rng): RoomLayout {
   for (const [x, y, kind] of spots) {
     obstacles.push({ kind, x: x + range(rng, -20, 20), y: y + range(rng, -20, 20), r: range(rng, 38, 46), seed: Math.floor(rng() * 1e6) });
   }
-  return { obstacles, pond: null, desk: null, waters: [{ x: WORLD_W / 2, y: WORLD_H / 2 + 30, rx: 330, ry: 175 }] };
+  return { obstacles, pond: null, desk: null, waters: [{ x: WORLD_W / 2, y: WORLD_H / 2 + 30, rx: 330, ry: 175 }], bells: [] };
 }
 
 /** 주인의 방 — 가운데를 넓게 비우고 대숲이 둘레를 두른다 */
@@ -196,6 +248,7 @@ export function encounter(def: RoomDef): Beat[] {
   // 주인은 따로 나타난다
   if (def.kind === 'boss' || def.kind === 'shop' || def.kind === 'spring' || def.kind === 'rest') return [];
   if (CHAPTERS[def.chapter].id === 'lotus') return lotusEncounter(def);
+  if (CHAPTERS[def.chapter].id === 'temple') return templeEncounter(def);
   if (def.kind === 'elite') {
     return [
       { groups: [['brute', 1], ['toad', 2]], trigger: 0 },
@@ -257,6 +310,36 @@ function lotusEncounter(def: RoomDef): Beat[] {
     { groups: [['turtle', 2], ['carp', 3]], trigger: 1 },
     { groups: [['swallow', 4], ['toad', 2], ['carp', 2]], trigger: 2 },
     { groups: [['brute', 1], ['carp', 3], ['turtle', 1]], trigger: 1 },
+  ];
+}
+
+/** 산사 — 등 뒤로 숨어드는 여우와, 돌로 굳었다 깨어나 내닫는 돌사자가 섞인다 */
+function templeEncounter(def: RoomDef): Beat[] {
+  const d = def.depth;
+  if (def.kind === 'elite') {
+    return [
+      { groups: [['brute', 1], ['lion', 2]], trigger: 0 },
+      { groups: [['brute', 1], ['fox', 3], ['drop', 3]], trigger: 1 },
+      { groups: [['brute', 2], ['lion', 1], ['fox', 1]], trigger: 1 },
+    ];
+  }
+  if (d <= 0) {
+    return [
+      { groups: [['fox', 2], ['drop', 4]], trigger: 0 },
+      { groups: [['lion', 1], ['swallow', 3]], trigger: 1 },
+    ];
+  }
+  if (d <= 2) {
+    return [
+      { groups: [['fox', 3], ['toad', 2]], trigger: 0 },
+      { groups: [['lion', 2], ['drop', 4]], trigger: 2 },
+      { groups: [['fox', 2], ['swallow', 3]], trigger: 1 },
+    ];
+  }
+  return [
+    { groups: [['lion', 2], ['fox', 2]], trigger: 1 },
+    { groups: [['swallow', 4], ['toad', 2], ['fox', 2]], trigger: 2 },
+    { groups: [['brute', 1], ['lion', 1], ['fox', 3]], trigger: 1 },
   ];
 }
 

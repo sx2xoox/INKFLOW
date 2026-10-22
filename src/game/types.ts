@@ -71,7 +71,9 @@ export interface Player {
   ky: number;
 }
 
-export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'carp' | 'turtle' | 'tiger' | 'imugi';
+export type EnemyKind = 'drop' | 'swallow' | 'brute' | 'toad' | 'carp' | 'turtle' | 'fox' | 'lion' | 'tiger' | 'imugi' | 'phoenix';
+/** 따로 그리는 주인들 — 아틀라스의 먹귀 그림에는 없다 */
+export type BossKind = 'tiger' | 'imugi' | 'phoenix';
 
 /**
  * 묵호(墨虎)의 동작.
@@ -89,10 +91,20 @@ export type TigerMove = 'perch' | 'descend' | 'roar' | 'stalk' | 'swipe' | 'crou
  */
 export type SerpentMove = 'rise' | 'swim' | 'surface' | 'bite' | 'spit' | 'sink' | 'burrow' | 'burst' | 'coil';
 
-export type BossMove = TigerMove | SerpentMove;
+/**
+ * 봉황의 동작.
+ * perch: 용마루에 앉아 내려다본다 → cry: 날개를 펴고 운다 → glide: 마당으로 내려앉는다
+ * hover: 낮게 떠서 맴돈다(붓이 닿는다) / volley: 깃털 부채를 날린다 / gust: 날개 바람으로 밀어낸다
+ * soar → plunge: 하늘 높이 올라 붓잡이를 쫓다가 붉은 원으로 내리꽂는다 → rest: 땅에서 숨을 고른다(틈)
+ * climb → sweep: 마당 끝으로 날아가 붉은 띠를 따라 낮게 활공한다
+ * fall: 종소리에 떨어져 버둥거린다(가장 큰 틈) / die
+ */
+export type BirdMove = 'perch' | 'cry' | 'glide' | 'hover' | 'volley' | 'gust' | 'soar' | 'plunge' | 'rest' | 'climb' | 'sweep' | 'fall' | 'die';
+
+export type BossMove = TigerMove | SerpentMove | BirdMove;
 
 export interface BossState {
-  species: 'tiger' | 'imugi';
+  species: BossKind;
   move: BossMove;
   /** 지금 동작에 들어선 뒤의 시간 */
   t: number;
@@ -129,6 +141,10 @@ export interface BossState {
   under: number;
   /** 머리가 향한 쪽(라디안) */
   heading: number;
+  /** 날갯짓의 위상(라디안) — 봉황 */
+  flap: number;
+  /** 종소리에 다시 떨어지지 않는 시간 — 봉황 */
+  guard: number;
 }
 
 export interface Enemy {
@@ -179,6 +195,8 @@ export interface Enemy {
   side: 1 | -1;
   /** 돌아서기까지 남은 시간 */
   turnT: number;
+  /** 여우가 물고 달아난 먹 — 쓰러뜨리면 되찾는다 */
+  carry: { ink: InkId; amount: number } | null;
   boss: BossState | null;
 }
 
@@ -208,7 +226,7 @@ export interface Trace {
   seed: number;
 }
 
-export type ProjectileKind = 'blade' | 'wave' | 'glob';
+export type ProjectileKind = 'blade' | 'wave' | 'glob' | 'feather';
 
 export interface Projectile {
   kind: ProjectileKind;
@@ -327,6 +345,19 @@ export interface Banner {
   color: RGB;
   /** 화면 아래쪽에 건다 — 위쪽의 무언가를 가리지 않게 */
   low?: boolean;
+}
+
+/** 산사의 범종 — 붓으로 치면 울려 둘레의 먹귀를 굳힌다. 한 번 울리면 한동안 쉰다 */
+export interface Bell {
+  x: number;
+  y: number;
+  /** 다시 칠 수 있을 때까지 */
+  cd: number;
+  /** 흔들리는 각도와 빠르기 */
+  swing: number;
+  vel: number;
+  /** 울림이 남은 정도 0..1 */
+  hum: number;
 }
 
 /** 담장에 그려지는 달문. room이 없으면 장을 마치는 문이다. */

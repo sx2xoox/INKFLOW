@@ -5,10 +5,12 @@
  * 새 먹을 이기는 먹귀들을 불러낸다. 불려 온 먹귀는 반드시 제 먹을 떨군다 — 주워서 먹을 바꾸라는 뜻이다.
  * 모든 공격은 바닥에 붉은 붓선으로 먼저 그려 보인다.
  */
+import { josa } from '../core/hangul';
 import { TAU, clamp, easeInOutSine, lerp, rand } from '../core/math';
 import { randomSeed } from '../core/rng';
 import { GENERATES, INKS, counterOf, inkColor } from '../ink';
 import { DAMMUK, INK } from '../render/color';
+import type { SoundEvent } from '../audio';
 import type { Game } from './game';
 import { hpScale } from './rooms';
 import { type Banner, type BossMove, type BossState, type Enemy, type EnemyKind, type Trace, WALL, WORLD_H, WORLD_W } from './types';
@@ -22,6 +24,8 @@ const DASH_SPEED = 780;
 const DASH_MAX = 620;
 /** 이 높이보다 뜨면 붓이 닿지 않는다 */
 const AIR = 22;
+/** 봉황은 날개가 길어 이보다 높이 날아야 붓이 닿지 않는다 */
+export const PHOENIX_AIR = 120;
 /** 바닥에 닿은 몸의 가로·세로 반지름 — 붓잡이를 밀어낸다 */
 export const TIGER_BODY = { rx: 78, ry: 26 };
 /** 담장 기와 위에 앉은 자리 */
@@ -52,6 +56,8 @@ export function makeBossState(): BossState {
     spine: [],
     under: 0,
     heading: 0,
+    flap: 0,
+    guard: 0,
   };
 }
 
@@ -60,6 +66,7 @@ export function untouchable(e: Enemy): boolean {
   const b = e.boss;
   if (!b) return false;
   if (b.species === 'imugi') return b.move === 'die' || b.move === 'rise' || b.under > 0.5;
+  if (b.species === 'phoenix') return b.move === 'die' || b.move === 'perch' || b.move === 'glide' || b.z > PHOENIX_AIR;
   return b.move === 'perch' || b.move === 'descend' || b.move === 'die' || b.z > AIR;
 }
 
@@ -428,10 +435,10 @@ function land(g: Game, e: Enemy, harm: boolean): void {
   if (dd < LAND_R + pl.r && g.hurtPlayer(18, e.el)) g.knockPlayer(dx / (dd || 1), dy / (dd || 1), 520);
 }
 
-/** 포효 — 붓잡이를 밀어내고 화면이 떨린다. 등장 때는 이름을 걸고 밀어내지 않는다 */
-export function roar(g: Game, e: Enemy, intro: Banner | null, headY = e.y - 50): void {
+/** 포효 — 붓잡이를 밀어내고 화면이 떨린다. 등장 때는 이름을 걸고 밀어내지 않는다. 봉황은 범처럼 울지 않는다 */
+export function roar(g: Game, e: Enemy, intro: Banner | null, headY = e.y - 50, voice: SoundEvent = { type: 'roar', big: true }): void {
   const pl = g.player;
-  g.sounds.push({ type: 'roar', big: true });
+  g.sounds.push(voice);
   g.shake = Math.max(g.shake, 16);
   g.addRing('enso', e.x, headY, 30, 300, 0.9, 12, INK);
   for (let i = 0; i < 26; i++) {
@@ -467,7 +474,7 @@ export function changeInk(g: Game, e: Enemy, name: string, minion: (i: number) =
   g.addRing('burst', e.x, e.y - 40, 30, 160, 0.6, 14, col);
   g.banner = {
     title: `${INKS[next].name}을 두르다`,
-    sub: `${name}가 ${INKS[next].hanja} 먹으로 갈아입는다 — ${INKS[counter].hanja} 먹이 이긴다`,
+    sub: `${josa(name, '이/가')} ${INKS[next].hanja} 먹으로 갈아입는다 — ${INKS[counter].hanja} 먹이 이긴다`,
     t: 0,
     dur: 2.6,
     color: INKS[next].edge,

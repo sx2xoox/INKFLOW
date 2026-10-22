@@ -261,7 +261,7 @@ export class Hud {
     this.label(`유리한 먹  ${hint}`, rx, m + 64, { size: 13, color: INK, halo: 2, weight: 700 }, 1, 0.5, 0.8);
   }
 
-  /** 대숲의 주인 — 이름과 긴 기력 획. 2/3, 1/3 자리에 포효할 마디가 있다 */
+  /** 장의 주인 — 이름과 긴 기력 획. 2/3, 1/3 자리에 포효할 마디가 있다 */
   private bossBar(g: Game, e: Enemy, y: number): void {
     const b = e.boss!;
     // 나타나는 동안은 아직 이름을 걸지 않는다
@@ -270,7 +270,14 @@ export class Hud {
       this.bossGhost = 1;
       return;
     }
-    const appear = b.move === 'rise' ? clamp((b.t - 1.5) / 0.5, 0, 1) : b.species === 'tiger' && b.roared === 1 && b.move === 'roar' ? clamp((b.t - 0.3) / 0.5, 0, 1) : 1;
+    const appear =
+      b.move === 'rise'
+        ? clamp((b.t - 1.5) / 0.5, 0, 1)
+        : b.species === 'tiger' && b.roared === 1 && b.move === 'roar'
+          ? clamp((b.t - 0.3) / 0.5, 0, 1)
+          : b.move === 'glide'
+            ? clamp(b.t / 0.5, 0, 1)
+            : 1;
     const w = this.w;
     // 왼쪽 위 콤보 표시와 겹치지 않을 만큼
     const L = clamp(w - 760, 220, 460);

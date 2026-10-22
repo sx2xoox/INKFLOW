@@ -20,7 +20,12 @@ export type SoundEvent =
   | { type: 'gate' }
   | { type: 'ui' }
   | { type: 'roar'; big: boolean }
-  | { type: 'claw' };
+  | { type: 'claw' }
+  | { type: 'bell' }
+  | { type: 'cry'; big: boolean }
+  | { type: 'gust' }
+  | { type: 'blink' }
+  | { type: 'stone' };
 
 /** 궁(C) 상(D) 각(E) 치(G) 우(A) */
 const NOTE: Record<InkId | 'plain', number> = {
@@ -157,7 +162,76 @@ export class Sound {
         this.burst(t + 0.06, 'highpass', 1800, 0.12, 0.3);
         this.thump(t + 0.05, 140, 0.3, 0.12);
         return;
+      case 'bell':
+        return this.bell(t);
+      case 'cry':
+        return this.cry(t, e.big);
+      case 'gust':
+        // 날개가 공기를 크게 밀어낸다
+        this.sweep(t, 200, 900, 0.45, 0.45, 'lowpass');
+        this.thump(t, 70, 0.4, 0.2);
+        return;
+      case 'blink':
+        // 먹 연기 — 훅 꺼지는 숨
+        this.sweep(t, 2400, 500, 0.18, 0.22, 'bandpass');
+        this.tone(t, 660, 0.12, 0.05, 'sine');
+        return;
+      case 'stone':
+        // 돌이 맞부딪히는 단단한 소리
+        this.tone(t, 1240, 0.06, 0.12, 'square');
+        this.burst(t, 'highpass', 3200, 0.05, 0.25);
+        this.thump(t, 180, 0.2, 0.05);
+        return;
     }
+  }
+
+  /**
+   * 범종 — 낮은 맥놀이가 길게 남는다. 고르지 않은 배음을 여럿 겹치고,
+   * 바닥음 둘을 살짝 어긋나게 해 소리가 울렁이게 한다.
+   */
+  private bell(t: number): void {
+    const f = 98;
+    for (const [mul, amp, dur] of [
+      [1, 0.3, 5.5],
+      [1.012, 0.22, 5.5],
+      [2.0, 0.12, 3.6],
+      [2.76, 0.1, 2.8],
+      [3.6, 0.06, 2.0],
+      [5.4, 0.04, 1.2],
+      [8.9, 0.025, 0.6],
+    ] as const) {
+      this.tone(t, f * mul, dur, amp, 'sine');
+    }
+    // 당목이 종을 치는 둔탁한 소리
+    this.thump(t, 90, 0.7, 0.25);
+    this.burst(t, 'lowpass', 600, 0.2, 0.35);
+  }
+
+  /** 봉황의 울음 — 높이 꺾여 올라가는 맑은 소리에 떨림을 얹는다 */
+  private cry(t: number, big: boolean): void {
+    const ctx = this.ctx!;
+    const dur = big ? 1.3 : 0.45;
+    for (const [mul, amp] of [
+      [1, big ? 0.22 : 0.14],
+      [1.5, big ? 0.1 : 0.06],
+    ] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(700 * mul, t);
+      o.frequency.exponentialRampToValueAtTime(1500 * mul, t + dur * 0.25);
+      o.frequency.exponentialRampToValueAtTime(900 * mul, t + dur);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 9;
+      const lg = ctx.createGain();
+      lg.gain.value = 40 * mul;
+      lfo.connect(lg).connect(o.frequency);
+      o.connect(this.env(t, dur, amp));
+      o.start(t);
+      lfo.start(t);
+      o.stop(t + dur + 0.05);
+      lfo.stop(t + dur + 0.05);
+    }
+    this.sweep(t, 1200, 4000, dur * 0.6, big ? 0.2 : 0.1, 'bandpass');
   }
 
   /** 범의 울음 — 낮게 떨리는 톱니파에 거친 숨을 섞는다 */

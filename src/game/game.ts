@@ -1,17 +1,20 @@
+import { josa } from '../core/hangul';
 import { TAU, clamp, dist, rand, randInt, shuffle, weighted } from '../core/math';
 import type { SoundEvent } from '../audio';
 import { randomSeed } from '../core/rng';
 import { EXCESS_COST, INKS, INK_ORDER, InkState, type InkId, affinity, counterOf, inkColor } from '../ink';
-import { type RGB, DAMMUK, INK, SEAL } from '../render/color';
+import { type RGB, DAMMUK, INK, SEAL, mix } from '../render/color';
 import { BRUSH_WIELDER, type CharacterDef, critChance } from './characters';
 import { TIGER_BODY, tigerHitCircles, untouchable, updateTiger } from './boss';
 import { imugiHitCircles, updateImugi } from './imugi';
-import { ENEMY_KINDS, carpSubmerged, makeEnemy, thinkEnemy, turtleBlocks } from './enemies';
+import { phoenixHearsBell, phoenixHitCircles, updatePhoenix } from './phoenix';
+import { ENEMY_KINDS, LION_CRACKED, carpSubmerged, foxHidden, lionCracked, lionStone, makeEnemy, thinkEnemy, turtleBlocks } from './enemies';
 import { ARTIFACTS, type ArtifactId } from './artifacts';
 import { type Item, artifactChoice, rollRewards, shopItems, springItems, startingItems } from './items';
 import { BASE_DAMAGE, type Move, inShape, shapeCenter } from './moves';
 import {
   type Beat,
+  BELL_MID,
   CHAPTERS,
   ENTRANCE,
   GATE_R,
@@ -28,6 +31,8 @@ import {
   holdDuration,
   dmgScale,
   hpScale,
+  chapterDone,
+  chapterRoad,
   roomTitle,
   makeLayout,
   nextRooms,
@@ -35,6 +40,7 @@ import {
 import {
   type Action,
   type Banner,
+  type Bell,
   type Enemy,
   type EnemyKind,
   type FloatText,
@@ -84,6 +90,12 @@ interface WaveState {
   rate: number;
   packT: number;
 }
+
+/** 범종 — 울림이 닿는 둘레, 다시 칠 수 있을 때까지, 먹귀에게 주는 피해(판의 깊이에 맞춰 커진다) */
+export const BELL_R = 230;
+const BELL_CD = 8;
+const BELL_DMG = 16;
+const BRONZE: RGB = [120, 112, 80];
 
 const DASH_TIME = 0.17;
 const DASH_SPEED = 680;
@@ -175,7 +187,9 @@ export class Game {
 
   /* 탐험 */
   room: RoomDef = firstRoom();
-  layout: RoomLayout = { obstacles: [], pond: null, desk: null, waters: [] };
+  layout: RoomLayout = { obstacles: [], pond: null, desk: null, waters: [], bells: [] };
+  /** 산사의 범종 */
+  bells: Bell[] = [];
   roomPhase: RoomPhase = 'fight';
   /** 방이 바뀔 때마다 오른다 — 화면이 그림을 새로 그린다 */
   roomVersion = 0;
@@ -337,6 +351,7 @@ export class Game {
   private setRoom(def: RoomDef): void {
     this.room = def;
     this.layout = makeLayout(def);
+    this.bells = this.layout.bells.map((o) => ({ x: o.x, y: o.y, cd: 0, swing: 0, vel: 0, hum: 0 }));
     this.roomVersion++;
     this.roomPhase = def.kind === 'spring' ? 'spring' : def.kind === 'shop' ? 'shop' : def.kind === 'rest' ? 'open' : 'fight';
     const pl = this.player;
@@ -534,7 +549,7 @@ export class Game {
     if (this.has('pine-dropper')) this.healPlayer(10);
     this.banner =
       this.room.kind === 'boss'
-        ? { title: `${CHAPTERS[this.room.chapter].boss.title}을 그려 내다`, sub: `${CHAPTERS[this.room.chapter].name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
+        ? { title: `${josa(CHAPTERS[this.room.chapter].boss.title, '을/를')} 그려 내다`, sub: `${CHAPTERS[this.room.chapter].name}의 마지막 폭에 낙관을 찍는다`, t: 0, dur: 2.4, color: INK }
         : { title: '한 폭을 그려 내다', sub: `${roomTitle(this.room, numeral)}에 낙관을 찍는다`, t: 0, dur: 2.0, color: INK };
   }
 
@@ -578,7 +593,7 @@ export class Game {
     this.banner = !next.length
       ? { title: '병풍을 다 그리다', sub: '마지막 문을 지나 화첩을 덮는다', t: 0, dur: 2.6, color: INK }
       : toRest
-        ? { title: `${ch.name}을 다 그리다`, sub: `${CHAPTERS[next[0].chapter].name}(${CHAPTERS[next[0].chapter].hanja})로 가는 문이 열린다`, t: 0, dur: 2.6, color: INK }
+        ? { title: chapterDone(ch), sub: `${chapterRoad(CHAPTERS[next[0].chapter])} 가는 문이 열린다`, t: 0, dur: 2.6, color: INK }
         : { title: '문이 열리다', sub: '문에 적힌 먹과 방을 보고 길을 고른다', t: 0, dur: 2.4, color: INK };
   }
 
@@ -744,6 +759,7 @@ export class Game {
     if (this.transition) input = { ...input, moveX: 0, moveY: -0.4, attack: false, dash: false };
     this.updatePlayer(dt, input);
     this.updateEnemies(dt);
+    this.updateBells(dt);
     this.updateProjectiles(dt);
     this.updateZones(dt);
     this.updatePickups(dt);
@@ -846,11 +862,14 @@ export class Game {
 
   private spawnOne(w: WaveState): void {
     const n = w.n;
+    // 탐험의 버티기 방에는 그 장의 먹귀가 섞인다
+    const kin = this.mode === 'explore' ? CHAPTERS[this.room.chapter].kin : [];
     const kind = weighted<EnemyKind>([
       ['drop', 10],
       ['swallow', n >= 2 ? 3 + n : 0],
       ['toad', n >= 3 ? 2 + n * 0.5 : 0],
       ['brute', n >= 4 ? 0.8 + n * 0.25 : 0],
+      ...kin.map((k, i): [EnemyKind, number] => [k, i === 0 ? 2.5 + n * 0.5 : n >= 2 ? 1 + n * 0.3 : 0]),
     ]);
     const p = this.findSpawn(420);
     this.addEnemy(kind, this.themedElement(w), p.x, p.y, w.hpMul);
@@ -1088,6 +1107,14 @@ export class Game {
       a.hits.set(e.id, n + 1);
       this.applyMoveHit(a, e);
     }
+    // 범종을 친다
+    this.bells.forEach((b, i) => {
+      const key = -1 - i;
+      if (b.cd > 0 || a.hits.has(key)) return;
+      if (!inShape(a, prog, b.x, b.y - 24, 46)) return;
+      a.hits.set(key, 1);
+      this.ringBell(i, b.x >= this.player.x ? 1 : -1);
+    });
     // 날아오는 먹덩이를 쳐낸다
     for (const pr of this.projectiles) {
       if (!pr.hostile || pr.dead) continue;
@@ -1156,7 +1183,7 @@ export class Game {
           break;
         }
       }
-      if (e.boss) (e.boss.species === 'imugi' ? updateImugi : updateTiger)(this, e, dt);
+      if (e.boss) (e.boss.species === 'imugi' ? updateImugi : e.boss.species === 'phoenix' ? updatePhoenix : updateTiger)(this, e, dt);
       else thinkEnemy(this, e, dt);
       if (!e.boss && e.kind !== 'carp' && e.kind !== 'turtle' && e.kind !== 'swallow') {
         const wm = this.waterMul(e.x, e.y, false);
@@ -1198,12 +1225,15 @@ export class Game {
       if (e.dead || e.spawnT > 0) continue;
       if (e.boss) {
         if (e.boss.species === 'imugi') this.imugiContact(e);
+        else if (e.boss.species === 'phoenix') this.phoenixContact(e);
         else this.tigerContact(e);
         continue;
       }
-      // 먹 속에 잠긴 잉어와 하늘의 잉어는 붓잡이와 부딪히지 않는다. 퍼덕이거나 뒤집힌 것은 닿아도 다치지 않는다
-      const harmless = (e.kind === 'carp' && e.ai !== 1) || (e.kind === 'turtle' && e.ai === 3);
-      if (e.kind === 'carp' && (e.ai === 0 || e.ai === 2)) {
+      // 먹 속에 잠긴 잉어와 하늘의 잉어는 붓잡이와 부딪히지 않는다. 퍼덕이거나 뒤집힌 것은 닿아도 다치지 않는다.
+      // 여우는 물 때만, 돌사자는 내달을 때만 다치게 한다
+      const harmless =
+        (e.kind === 'carp' && e.ai !== 1) || (e.kind === 'turtle' && e.ai === 3) || (e.kind === 'fox' && e.ai !== 3) || (e.kind === 'lion' && e.ai !== 3);
+      if ((e.kind === 'carp' && (e.ai === 0 || e.ai === 2)) || foxHidden(e)) {
         e.x = clamp(e.x, WALL, WORLD_W - WALL);
         e.y = clamp(e.y, WALL_TOP, WORLD_H - WALL);
         continue;
@@ -1219,9 +1249,163 @@ export class Game {
         // 붓잡이를 파고들지 못하게
         e.x = pl.x + (dx / d) * rr;
         e.y = pl.y + (dy / d) * rr;
-        if (e.stunT <= 0 && !harmless) this.hurtPlayer(e.dmg, e.el);
+        if (e.stunT <= 0 && !harmless && this.hurtPlayer(e.dmg, e.el)) {
+          if (e.kind === 'fox') this.foxSteal(e);
+          if (e.kind === 'lion') this.knockPlayer(Math.cos(e.face), Math.sin(e.face), 560);
+        }
       }
     }
+  }
+
+  /** 땅에 내려앉은 봉황은 붓잡이를 밀어낸다. 떠 있을 때는 그 아래로 지나간다 */
+  private phoenixContact(e: Enemy): void {
+    const b = e.boss!;
+    if (b.z > 14 || b.move === 'perch' || b.move === 'die') return;
+    const pl = this.player;
+    const rr = 34 + pl.r;
+    const dx = pl.x - e.x;
+    const dy = pl.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d < rr && pl.dashT <= 0) {
+      const k = d > 0.001 ? rr / d : 1;
+      pl.x = e.x + (d > 0.001 ? dx : 1) * k;
+      pl.y = e.y + (d > 0.001 ? dy : 0) * k;
+      this.pushOut(pl, pl.r);
+    }
+  }
+
+  /* ───────── 범종 ───────── */
+
+  private updateBells(dt: number): void {
+    for (const b of this.bells) {
+      b.cd = Math.max(0, b.cd - dt);
+      b.hum = Math.max(0, b.hum - dt * 0.35);
+      // 매달린 종이 흔들리다 멎는다
+      b.vel += (-b.swing * 18 - b.vel * 1.6) * dt;
+      b.swing += b.vel * dt;
+    }
+  }
+
+  /** 이 자리 가까이에 범종이 있으면 그 번호 */
+  bellNear(x: number, y: number, pad: number): number {
+    return this.bells.findIndex((b) => Math.hypot(x - b.x, (y - b.y) / OBSTACLE_SQUASH) < 40 + pad);
+  }
+
+  /** 범종이 울린다 — 둘레의 먹귀를 치고 굳힌다. 돌사자는 금이 가고, 숨은 여우는 드러나고, 낮게 뜬 봉황은 떨어진다 */
+  ringBell(i: number, side: 1 | -1): void {
+    const b = this.bells[i];
+    if (!b || b.cd > 0) return;
+    b.cd = BELL_CD;
+    b.vel += 1.5 * side;
+    b.hum = 1;
+    this.sounds.push({ type: 'bell' });
+    this.shake = Math.max(this.shake, 8);
+    this.hitstop = Math.max(this.hitstop, 0.05);
+    this.addRing('shock', b.x, b.y, 30, BELL_R, 0.85, 10, BRONZE);
+    this.addRing('enso', b.x, b.y - BELL_MID, 24, 120, 0.8, 6, BRONZE);
+    this.text(b.x, b.y - BELL_MID - 70, '鐘', mix(BRONZE, INK, 0.3), 30);
+    const hp = hpScale(this.room);
+    for (const e of this.enemies) {
+      if (e.dead || e.spawnT > 0) continue;
+      const d = Math.hypot(e.x - b.x, (e.y - b.y) / 0.75);
+      if (d > BELL_R) continue;
+      if (e.boss) {
+        if (e.boss.species === 'phoenix' && !untouchable(e) && phoenixHearsBell(this, e)) {
+          this.damageEnemy(e, 40, null, {});
+        }
+        continue;
+      }
+      const a = Math.atan2(e.y - b.y, e.x - b.x);
+      if (foxHidden(e)) {
+        // 연기 속에 숨은 여우가 종소리에 드러난다
+        e.ai = 4;
+        e.aiT = 1.1;
+        this.foxPuff(e);
+      }
+      if (e.kind === 'lion') this.crackLion(e, LION_CRACKED + 0.4);
+      const k = (BELL_DMG * hp * (1 - (d / BELL_R) * 0.4)) | 0;
+      const push = 320 / e.mass;
+      this.damageEnemy(e, k, null, { kx: Math.cos(a) * push, ky: Math.sin(a) * push });
+      if (!e.dead) e.stunT = Math.max(e.stunT, 1.2);
+    }
+  }
+
+  /* ───────── 산사의 먹귀 ───────── */
+
+  /** 먹 연기 — 여우가 사라지고 나타나는 자리 */
+  private foxPuff(e: Enemy): void {
+    const col = inkColor(e.el);
+    this.addRing('spawn', e.x, e.y, 6, 34, 0.45, 3, col);
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * TAU;
+      const sp = rand(40, 140);
+      this.addParticle(e.x + Math.cos(a) * 8, e.y - 14 + Math.sin(a) * 6, Math.cos(a) * sp, Math.sin(a) * sp * 0.6 - 30, rand(2.5, 5), i % 3 ? DAMMUK : col, 0.55, rand(0.35, 0.6), false, 40);
+    }
+  }
+
+  foxVanish(e: Enemy): void {
+    this.foxPuff(e);
+    this.sounds.push({ type: 'blink' });
+  }
+
+  foxAppear(e: Enemy): void {
+    this.foxPuff(e);
+    this.stamps.push({ kind: 'blob', x: e.x, y: e.y + 2, r: 14, color: inkColor(e.el), alpha: 0.2, seed: e.seed + 3, rot: 0, wet: 0.6 });
+    this.sounds.push({ type: 'blink' });
+  }
+
+  /** 여우에게 물리면 지금 주속성의 젖은 먹을 빼앗긴다 — 쓰러뜨리면 되찾는다 */
+  private foxSteal(e: Enemy): void {
+    const dom = this.ink.dominant;
+    const pl = this.player;
+    e.ai = 5;
+    e.aiT = 1.6;
+    if (!dom || (e.carry && e.carry.ink !== dom)) return;
+    const amt = Math.min(6, Math.floor(this.ink.wet[dom]));
+    if (amt <= 0) return;
+    this.ink.apply({ [dom]: -amt });
+    if (e.carry) e.carry.amount += amt;
+    else e.carry = { ink: dom, amount: amt };
+    this.text(pl.x, pl.y - 84, `${INKS[dom].hanja} −${amt} 빼앗기다`, INKS[dom].edge, 16);
+    for (let i = 0; i < 6; i++) this.addParticle(pl.x, pl.y - 20, (e.x - pl.x) * rand(1, 3), (e.y - pl.y) * rand(1, 3) - 40, rand(2, 3.5), inkColor(dom), 0.85, rand(0.3, 0.5), false);
+  }
+
+  lionWake(e: Enemy): void {
+    this.sounds.push({ type: 'stone' });
+    this.addRing('crack', e.x, e.y - 14, 6, 28, 0.5, 2, mix(inkColor(e.el), INK, 0.3));
+    for (let i = 0; i < 6; i++) this.addParticle(e.x + rand(-14, 14), e.y - rand(4, 30), rand(-40, 40), rand(-60, -10), rand(1.5, 3), [150, 144, 132], 0.8, rand(0.3, 0.6), true);
+  }
+
+  /** 돌사자가 담이나 바위, 종각에 머리를 박았다 — 금이 가 크게 들어간다. 종각이면 종이 울린다 */
+  lionCrash(e: Enemy, nx: number, ny: number): void {
+    e.vx = 0;
+    e.vy = 0;
+    this.sounds.push({ type: 'quake' });
+    this.shake = Math.max(this.shake, 9);
+    this.hitstop = Math.max(this.hitstop, 0.05);
+    this.addRing('shock', e.x, e.y, 14, 70, 0.45, 6, [150, 144, 132]);
+    this.crackLion(e, LION_CRACKED);
+    this.damageEnemy(e, e.maxHp * 0.15, null, {});
+    const i = this.bellNear(nx, ny, e.r + 20);
+    if (i >= 0) this.ringBell(i, nx >= e.x ? 1 : -1);
+  }
+
+  /** 금이 간다 */
+  private crackLion(e: Enemy, dur: number): void {
+    e.ai = 4;
+    e.aiT = dur;
+    e.charge = 0;
+    e.mass = 5;
+    this.addRing('crack', e.x, e.y - 12, 10, 46, 0.8, 3, INK);
+    this.text(e.x, e.y - e.r * 2.6, '裂', INK, 20);
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * TAU;
+      this.addParticle(e.x, e.y - 16, Math.cos(a) * rand(80, 200), Math.sin(a) * rand(80, 200) - 40, rand(2, 4), [168, 162, 148], 0.95, rand(0.3, 0.6), true);
+    }
+  }
+
+  lionSettle(e: Enemy): void {
+    this.addRing('spawn', e.x, e.y, 8, 30, 0.4, 2, [150, 144, 132]);
   }
 
   /** 묵호는 무거워서 붓잡이를 밀어낸다. 닿기만 해서는 다치지 않는다 — 다치는 건 할퀴기·덮치기·내달리기 */
@@ -1322,7 +1506,12 @@ export class Game {
       const blocked = p.kind !== 'wave' && this.insideObstacle(p.x, p.y + 10, 0) && !this.inPond(p.x, p.y + 10);
       if (p.life <= 0 || out || blocked) {
         p.dead = true;
-        if (p.kind === 'glob') this.splash(p.x, p.y, 10, inkColor(p.ink), 5);
+        // 붓잡이의 검기나 먹물이 종각에 닿으면 종이 울린다
+        if (blocked && !p.hostile) {
+          const bi = this.bellNear(p.x, p.y + 10, 10);
+          if (bi >= 0) this.ringBell(bi, p.vx >= 0 ? 1 : -1);
+        }
+        if (p.kind === 'glob' || p.kind === 'feather') this.splash(p.x, p.y, p.kind === 'feather' ? 7 : 10, inkColor(p.ink), 5);
         if (p.kind === 'wave') this.splash(p.x, p.y, 30, INKS.heuk.color, 10);
         continue;
       }
@@ -1441,6 +1630,15 @@ export class Game {
     o: { kx?: number; ky?: number; crit?: boolean; quiet?: boolean } = {},
   ): void {
     if (e.dead) return;
+    // 돌로 굳은 사자에게는 붓이 통하지 않는다
+    if (lionStone(e)) {
+      if (!o.quiet) {
+        e.hitT = 0.1;
+        if (Math.random() < 0.6) this.text(e.x + rand(-6, 6), e.y - e.r * 2.4, '石', [110, 106, 98], 16);
+        this.sounds.push({ type: 'stone' });
+      }
+      return;
+    }
     const ex = this.ink.excess;
     const mult = affinity(ink, e.el, ink !== null && ink === ex);
     let bonus = 1;
@@ -1452,6 +1650,7 @@ export class Game {
       bonus *= 0.2;
       if (Math.random() < 0.5) this.text(e.x + rand(-6, 6), e.y - e.r * 2.2, '甲', [96, 92, 86], 15);
     }
+    if (lionCracked(e)) bonus *= 1.6;
     const dmg = amount * mult * bonus;
     e.hp -= dmg;
     if (!o.quiet) e.hitT = 0.14;
@@ -1484,7 +1683,7 @@ export class Game {
 
   /** 붓이 닿는 먹귀인지 — 솟는 중이거나 하늘 높이 뜬 묵호는 닿지 않는다 */
   hittable(e: Enemy): boolean {
-    return !e.dead && e.spawnT <= 0 && !untouchable(e) && !carpSubmerged(e);
+    return !e.dead && e.spawnT <= 0 && !untouchable(e) && !carpSubmerged(e) && !foxHidden(e);
   }
 
   /** 물에 들어서면 걸음이 무거워진다. 헤엄치는 것(잉어)은 오히려 빨라진다 */
@@ -1516,7 +1715,7 @@ export class Game {
 
   /** 맞는 자리 — 대부분 원 하나, 몸이 긴 묵호는 셋 */
   private bodyCircles(e: Enemy): { x: number; y: number; r: number }[] {
-    if (e.boss) return e.boss.species === 'imugi' ? imugiHitCircles(e) : tigerHitCircles(e);
+    if (e.boss) return e.boss.species === 'imugi' ? imugiHitCircles(e) : e.boss.species === 'phoenix' ? phoenixHitCircles(e) : tigerHitCircles(e);
     return [{ x: e.x, y: e.y - e.r * 0.5, r: e.r }];
   }
 
@@ -1528,11 +1727,12 @@ export class Game {
     b.move = 'die';
     b.t = 0;
     b.dur = 2.1;
-    b.z = 0;
+    // 봉황은 날던 자리에서 떨어진다
+    if (b.species !== 'phoenix') b.z = 0;
     this.timeScale = 0.3;
     this.hitstop = Math.max(this.hitstop, 0.18);
     this.shake = Math.max(this.shake, 18);
-    this.sounds.push({ type: 'roar', big: true });
+    this.sounds.push(b.species === 'phoenix' ? { type: 'cry', big: true } : { type: 'roar', big: true });
     // 불려 온 먹귀들은 주인을 따라 흩어진다
     for (const m of this.enemies) if (m !== e && !m.dead) this.killEnemy(m, null);
   }
@@ -1565,7 +1765,7 @@ export class Game {
   private killEnemy(e: Enemy, ink: InkId | null): void {
     e.dead = true;
     this.kills++;
-    this.sounds.push({ type: 'kill', big: e.kind === 'brute' || e.kind === 'tiger' });
+    this.sounds.push({ type: 'kill', big: e.kind === 'brute' || e.kind === 'lion' || !!e.boss });
     const col = inkColor(e.el);
     this.stamps.push({ kind: 'splat', x: e.x, y: e.y, r: e.r * 1.5, color: col, alpha: 0.5, seed: e.seed, rot: Math.random() * TAU, wet: 1 });
     this.addRing('burst', e.x, e.y - e.r * 0.4, e.r * 0.6, e.r * 2.6, 0.4, e.r * 0.35, col);
@@ -1580,7 +1780,13 @@ export class Game {
       const a = Math.random() * TAU;
       this.pickups.push({ x: e.x, y: e.y, vx: Math.cos(a) * 80, vy: Math.sin(a) * 80, ink: e.el, amount: e.loot || def.dropAmount, t: 0, life: 16, seed: e.seed, dead: false });
     }
-    const big = e.kind === 'brute' || e.kind === 'tiger';
+    // 여우가 물고 간 먹을 되찾는다
+    if (e.carry) {
+      const a = Math.random() * TAU;
+      this.pickups.push({ x: e.x, y: e.y, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60, ink: e.carry.ink, amount: e.carry.amount, t: 0, life: 16, seed: e.seed + 1, dead: false });
+      this.text(e.x, e.y - 40, `${INKS[e.carry.ink].hanja} 먹을 되찾다`, INKS[e.carry.ink].edge, 15);
+    }
+    const big = e.kind === 'brute' || e.kind === 'lion' || !!e.boss;
     this.hitstop = Math.max(this.hitstop, big ? 0.09 : 0.02);
     this.shake = Math.max(this.shake, big ? 10 : 3);
     if (e.burnStacks > 0 && ink !== null) {

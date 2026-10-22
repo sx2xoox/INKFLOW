@@ -59,6 +59,8 @@ export function makeImugiState(): BossState {
     spine,
     under: 1,
     heading: -Math.PI / 2,
+    flap: 0,
+    guard: 0,
   };
 }
 

@@ -7,6 +7,8 @@ import {
   drawBrute,
   drawCarp,
   drawDrop,
+  drawFox,
+  drawLion,
   drawGlow,
   drawInkWell,
   drawPickup,
@@ -19,9 +21,10 @@ import {
   drawWash,
   type SpriteDraw,
 } from '../render/sprites';
-import type { EnemyKind } from '../game/types';
+import type { BossKind, EnemyKind } from '../game/types';
 import { TIGER_FRAMES, type TigerPoseName, drawTiger } from '../render/tiger';
 import { drawImugiHead } from '../render/imugi';
+import { drawPhoenixBody } from '../render/phoenix';
 import { Atlas } from './atlas';
 
 export const BLOB_VARIANTS = 6;
@@ -42,7 +45,7 @@ interface EnemyArt {
   period: number;
 }
 
-export const ENEMY_ART: Record<Exclude<EnemyKind, 'tiger' | 'imugi'>, EnemyArt> = {
+export const ENEMY_ART: Record<Exclude<EnemyKind, BossKind>, EnemyArt> = {
   drop: { draw: drawDrop, w: 46, h: 52, ox: 23, oy: 46, period: 1.1 },
   swallow: { draw: drawSwallow, w: 72, h: 64, ox: 38, oy: 32, period: 0.34 },
   toad: { draw: drawToad, w: 84, h: 62, ox: 42, oy: 52, period: 1.6 },
@@ -50,6 +53,9 @@ export const ENEMY_ART: Record<Exclude<EnemyKind, 'tiger' | 'imugi'>, EnemyArt> 
   // 잉어와 거북은 0~5가 움직임, 6·7은 따로 고르는 자세
   carp: { draw: drawCarp, w: 76, h: 64, ox: 38, oy: 52, period: 0.7 },
   turtle: { draw: drawTurtle, w: 72, h: 50, ox: 34, oy: 42, period: 1.3 },
+  // 여우는 0~5가 종종걸음, 6·7은 노림과 물기. 돌사자는 동작마다 자세를 고른다
+  fox: { draw: drawFox, w: 92, h: 62, ox: 48, oy: 52, period: 0.5 },
+  lion: { draw: drawLion, w: 92, h: 74, ox: 44, oy: 64, period: 0.36 },
 };
 
 /** 묵호 그림 상자 — 치켜든 앞발과 꼬리까지 들어가게 */
@@ -79,6 +85,13 @@ export const IMUGI_HEAD = { w: 156, h: 105, ox: 45, oy: 57 };
 const IMUGI_SCALE = 1.5;
 export const imugiFrame = (el: InkId, open: boolean): string => `imugi/${el}/${open ? 1 : 0}`;
 export const imugiWhite = (open: boolean): string => `imugi/white/${open ? 1 : 0}`;
+
+/** 봉황의 몸 — 먹마다, 부리를 다문 것과 벌린 것. 날개와 꼬리는 화면이 붓으로 긋는다 */
+export const PHOENIX_BODY = { w: 152, h: 136, ox: 72, oy: 104 };
+/** 봉황은 크게 굽는다 — 날개를 붙일 어깨 자리도 이 배율을 따른다 */
+export const PHOENIX_SCALE = 1.3;
+export const phoenixFrame = (el: InkId, open: boolean): string => `phoenix/${el}/${open ? 1 : 0}`;
+export const phoenixWhite = (open: boolean): string => `phoenix/white/${open ? 1 : 0}`;
 
 export const enemyFrame = (kind: keyof typeof ENEMY_ART, el: InkId, f: number): string => `enemy/${kind}/${el}/${f}`;
 export const enemyWhite = (kind: keyof typeof ENEMY_ART, f: number): string => `enemy/${kind}/white/${f}`;
@@ -117,6 +130,28 @@ export function buildAtlas(): Atlas {
       (c) => {
         c.scale(IMUGI_SCALE, IMUGI_SCALE);
         drawImugiHead(c, open ? 1 : 0, INKS.heuk.color, INKS.heuk.edge);
+      },
+      'white',
+    );
+  }
+  for (const open of [false, true]) {
+    const B = PHOENIX_BODY;
+    for (const el of INK_ORDER) {
+      const d = INKS[el];
+      at.add(phoenixFrame(el, open), B.w, B.h, B.ox, B.oy, (c) => {
+        c.scale(PHOENIX_SCALE, PHOENIX_SCALE);
+        drawPhoenixBody(c, open ? 1 : 0, d.color, d.edge);
+      });
+    }
+    at.add(
+      phoenixWhite(open),
+      B.w,
+      B.h,
+      B.ox,
+      B.oy,
+      (c) => {
+        c.scale(PHOENIX_SCALE, PHOENIX_SCALE);
+        drawPhoenixBody(c, open ? 1 : 0, INKS.heuk.color, INKS.heuk.edge);
       },
       'white',
     );

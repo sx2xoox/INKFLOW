@@ -3,25 +3,60 @@
  * 모든 먹(인물, 먹귀, 획, 자국)은 먹 레이어에 그린 뒤 합성 셰이더가 한지에 스미게 한다.
  */
 import { type Application, Container, RenderTexture, Sprite, Texture } from 'pixi.js';
-import { clamp, lerp } from '../core/math';
+import { type Vec, TAU, clamp, lerp } from '../core/math';
 import type { Game } from '../game/game';
 import type { Enemy } from '../game/types';
 import { TIGER_BODY } from '../game/boss';
 import { SPINE_N, segZ } from '../game/imugi';
+import { BODY_LIFT, GUST_BEATS, TAIL_N } from '../game/phoenix';
+import { FOX_APPEAR, FOX_VANISH, LION_SETTLE } from '../game/enemies';
 import { ARTIFACTS } from '../game/artifacts';
 import { TIGER_FRAMES, type TigerPoseName } from '../render/tiger';
 import { WORLD_H, WORLD_W } from '../game/types';
 import { INKS, inkColor } from '../ink';
-import { DAMMUK, INK, PAPER_LIGHT, mix } from '../render/color';
-import { CHAPTERS, ROOM_KINDS, type RoomDef, WALL_TOP, roomDesc, roomGlyph } from '../game/rooms';
+import { type RGB, DAMMUK, INK, PAPER_LIGHT, mix } from '../render/color';
+import { BELL_HANG, CHAPTERS, ROOM_KINDS, type RoomDef, WALL_TOP, roomDesc, roomGlyph } from '../game/rooms';
+import { BELL_BOX, paintBell } from '../render/temple';
+import { PHOENIX_FIVE } from '../render/phoenix';
 import { paintSeal } from '../render/paper';
 import { createRoomCanvas, paintObstacle } from '../render/room';
 import { ENEMY_FRAMES, WALK_FRAMES } from '../render/sprites';
 import { arcPoints } from '../render/brush';
 import { BAKE, type Atlas, type Frame } from './atlas';
-import { BLOB_R, BLOB_VARIANTS, ENEMY_ART, WASH_R, WASH_VARIANTS, buildAtlas, enemyFrame, enemyWhite, imugiFrame, imugiWhite, tigerAtlas, tigerFrame } from './assets';
+import {
+  BLOB_R,
+  BLOB_VARIANTS,
+  ENEMY_ART,
+  PHOENIX_SCALE,
+  WASH_R,
+  WASH_VARIANTS,
+  buildAtlas,
+  enemyFrame,
+  enemyWhite,
+  imugiFrame,
+  imugiWhite,
+  phoenixFrame,
+  phoenixWhite,
+  tigerAtlas,
+  tigerFrame,
+} from './assets';
 import { Compositor } from './composite';
-import { drawDashTrail, drawGate, drawImugiTells, drawPlayerGear, drawProjectile, drawRing, drawSash, drawStatus, drawTigerTells, drawTrace, drawZone } from './fx';
+import {
+  drawBell,
+  drawDashTrail,
+  drawGate,
+  drawImugiTells,
+  drawPhoenixTells,
+  drawPlayerGear,
+  drawProjectile,
+  drawRing,
+  drawSash,
+  drawStatus,
+  drawTempleTells,
+  drawTigerTells,
+  drawTrace,
+  drawZone,
+} from './fx';
 import { Hud } from './hud';
 import { InkSim } from './inksim';
 import { bakePaperFx } from './paperfx';
@@ -83,8 +118,10 @@ export class View {
   private readonly groundStrokes = new StrokeBatch();
   private readonly fxStrokes = new StrokeBatch();
   private readonly playerStrokes = new StrokeBatch(4000);
-  /** 이무기의 몸 — 마디를 따라 붓으로 그린다 */
+  /** 이무기의 몸, 봉황의 먼 날개와 꼬리 — 마디를 따라 붓으로 그린다 */
   private readonly bossStrokes = new StrokeBatch(6000);
+  /** 봉황의 가까운 날개와 다리 — 몸 앞에 */
+  private readonly bossFront = new StrokeBatch(4000);
   private readonly groundPool: SpritePool;
   private readonly particlePool: SpritePool;
   private readonly textPool: SpritePool;
@@ -102,6 +139,10 @@ export class View {
   private paperTex: Texture;
   private paperCanvas: HTMLCanvasElement;
   private obstacleSprites: Sprite[] = [];
+  /** 종각에 매달린 범종 — 흔들린다 */
+  private bellSprites: Sprite[] = [];
+  /** 붓잡이가 다가간, 칠 수 있는 범종 */
+  private bellHint: { x: number; y: number; a: number } | null = null;
   private seal: Sprite | null = null;
   private sealT = 0;
   private seenRoom = -1;
@@ -161,7 +202,7 @@ export class View {
     this.playerBody = this.frameSprite('player/0');
     this.playerFlash = this.frameSprite('player/white/0');
     this.player.addChild(this.playerBody, this.playerFlash);
-    this.entities.addChild(this.player, this.playerStrokes.mesh, this.bossStrokes.mesh);
+    this.entities.addChild(this.player, this.playerStrokes.mesh, this.bossStrokes.mesh, this.bossFront.mesh);
 
     this.hud = new Hud(this.hudLayer, this.atlas, this.text);
     this.resize();
@@ -312,6 +353,25 @@ export class View {
       return s;
     });
 
+    for (const s of this.bellSprites) s.destroy({ texture: true, textureSource: true });
+    this.bellSprites = g.bells.map((b) => {
+      const B = BELL_BOX;
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(B.w * 2);
+      c.height = Math.ceil(B.h * 2);
+      const ctx = c.getContext('2d')!;
+      ctx.scale(2, 2);
+      ctx.translate(B.ox, B.oy);
+      paintBell(ctx);
+      const s = new Sprite(Texture.from(c));
+      s.anchor.set(B.ox / B.w, B.oy / B.h);
+      s.scale.set(0.5);
+      s.position.set(b.x, b.y - BELL_HANG);
+      s.zIndex = b.y + 0.5;
+      this.entities.addChild(s);
+      return s;
+    });
+
     for (const sp of this.enemySprites.values()) sp.root.destroy({ children: true });
     this.enemySprites.clear();
     for (const d of this.dying) d.root.destroy({ children: true });
@@ -350,7 +410,7 @@ export class View {
     ctx.drawImage(this.paperCanvas, 0, 0, W, H);
     const layer = new Container();
     layer.addChild(new Sprite(this.stains.texture));
-    for (const s of this.obstacleSprites) {
+    for (const s of [...this.obstacleSprites, ...this.bellSprites]) {
       const c = new Sprite(s.texture);
       c.anchor.copyFrom(s.anchor);
       c.scale.copyFrom(s.scale);
@@ -396,10 +456,14 @@ export class View {
       !this.focus &&
       g.phase === 'play' &&
       !!bb &&
-      (bb.move === 'perch' || bb.move === 'descend' || bb.move === 'rise' || (bb.species === 'tiger' && bb.move === 'roar' && bb.roared === 1 && bb.t < 1.3));
+      (bb.move === 'perch' ||
+        bb.move === 'descend' ||
+        bb.move === 'rise' ||
+        (bb.species === 'phoenix' && bb.move === 'glide' && bb.t < 0.5) ||
+        (bb.species === 'tiger' && bb.move === 'roar' && bb.roared === 1 && bb.t < 1.3));
     if (intro && boss && bb) {
       fx = lerp(pl.x, boss.x, 0.85);
-      fy = boss.y - bb.z - 60;
+      fy = boss.y - bb.z - (bb.species === 'phoenix' ? 40 : 60);
     }
     let tx = fx - vw / 2;
     let ty = fy - vh / 2;
@@ -419,6 +483,7 @@ export class View {
   }
 
   private drawGround(g: Game): void {
+    this.bellHint = null;
     this.groundPool.begin();
     this.groundStrokes.begin();
     const t = g.time;
@@ -478,6 +543,10 @@ export class View {
         drawImugiTells(this.groundStrokes, e, t);
         continue;
       }
+      if (b.species === 'phoenix') {
+        drawPhoenixTells(this.groundStrokes, e, t);
+        continue;
+      }
       const s = this.groundPool.next();
       this.setFrame(s, `wash/${e.seed % WASH_VARIANTS}`);
       const k = ((e.r * 2.3) / WASH_R / BAKE) * (1 + 0.06 * Math.sin(t * 2.4)) / (1 + b.z / 120);
@@ -487,6 +556,17 @@ export class View {
       s.tint = toHex(inkColor(e.el));
       s.alpha = (b.move === 'die' ? 0.2 : 0.38) * (b.move === 'perch' ? 0 : 1);
       drawTigerTells(this.groundStrokes, e, t);
+    }
+
+    // 여우와 돌사자의 다음 수, 범종의 울림
+    for (const e of g.enemies) if (e.kind === 'fox' || e.kind === 'lion') drawTempleTells(this.groundStrokes, e);
+    for (const b of g.bells) drawBell(this.groundStrokes, b, BELL_HANG, 8, t);
+    if (g.bells.length && g.roomPhase === 'fight') {
+      for (const b of g.bells) {
+        if (b.cd > 0) continue;
+        const near = clamp(1 - (Math.hypot(pl.x - b.x, pl.y - b.y) - 110) / 160, 0, 1);
+        if (near > 0.02) this.bellHint = { x: b.x, y: b.y + 40, a: near };
+      }
     }
 
     // 먹귀 그림자
@@ -557,8 +637,16 @@ export class View {
     // 붓이 뒤로 갈 때는 몸 뒤에 그린다
     this.playerStrokes.mesh.zIndex = Math.sin(pl.brushAngle) < -0.35 ? pl.y - 0.5 : pl.y + 0.5;
 
+    // 범종 — 매달린 고리를 축으로 흔들린다
+    this.bellSprites.forEach((s, i) => {
+      const b = g.bells[i];
+      if (!b) return;
+      s.rotation = b.swing * 0.35 + (b.hum > 0.6 ? Math.sin(t * 50) * 0.01 * b.hum : 0);
+    });
+
     // 먹귀
     this.bossStrokes.begin();
+    this.bossFront.begin();
     for (const sp of this.enemySprites.values()) sp.seen = false;
     for (const e of g.enemies) {
       let sp = this.enemySprites.get(e.id);
@@ -568,8 +656,11 @@ export class View {
         shadow.tint = toHex(DAMMUK);
         const tiger = e.kind === 'tiger';
         const imugi = e.kind === 'imugi';
-        const body = this.frameSprite(tiger ? tigerFrame('walk') : imugi ? imugiFrame(e.el, false) : enemyFrame(e.kind as keyof typeof ENEMY_ART, e.el, 0));
-        const flash = this.frameSprite(tiger ? tigerFrame('walk', 0, true) : imugi ? imugiWhite(false) : enemyWhite(e.kind as keyof typeof ENEMY_ART, 0));
+        const phoenix = e.kind === 'phoenix';
+        const body = this.frameSprite(
+          tiger ? tigerFrame('walk') : imugi ? imugiFrame(e.el, false) : phoenix ? phoenixFrame(e.el, false) : enemyFrame(e.kind as keyof typeof ENEMY_ART, e.el, 0),
+        );
+        const flash = this.frameSprite(tiger ? tigerFrame('walk', 0, true) : imugi ? imugiWhite(false) : phoenix ? phoenixWhite(false) : enemyWhite(e.kind as keyof typeof ENEMY_ART, 0));
         if (e.kind !== 'swallow') root.addChild(shadow);
         root.addChild(body, flash);
         this.entities.addChild(root);
@@ -585,16 +676,28 @@ export class View {
         this.drawImugi(e, sp, dt);
         continue;
       }
+      if (e.kind === 'phoenix') {
+        this.drawPhoenix(e, sp);
+        continue;
+      }
       const kind = e.kind;
       const art = ENEMY_ART[kind];
       const held = e.stunT > 0 || e.rootT > 0;
       const animSpeed = held ? 0.25 : e.slowT > 0 || e.inPool ? 0.5 : 1;
-      // 잉어와 거북은 0~5가 움직임, 6·7은 동작에 따라 고른다
-      const posed = kind === 'carp' || kind === 'turtle';
+      // 잉어와 거북, 여우는 0~5가 움직임, 6·7은 동작에 따라 고른다. 돌사자는 동작마다 자세가 정해져 있다
+      const posed = kind === 'carp' || kind === 'turtle' || kind === 'fox' || kind === 'lion';
       const cycle = posed ? 6 : ENEMY_FRAMES;
       let f = Math.floor(((e.anim * animSpeed) / art.period) * cycle + e.seed) % cycle;
       if (kind === 'carp' && e.ai >= 2) f = e.ai === 2 ? 6 : 7;
       if (kind === 'turtle' && e.ai >= 1) f = e.ai === 3 ? 7 : 6;
+      if (kind === 'fox') {
+        if (e.ai === 2) f = 6;
+        else if (e.ai === 3) f = 7;
+        else if (Math.hypot(e.vx, e.vy) < 12) f = 0;
+      }
+      if (kind === 'lion') {
+        f = [0, 1, 2, Math.floor(e.anim * 14) % 2 ? 3 : 4, 5, e.aiT > LION_SETTLE * 0.5 ? 2 : 1][e.ai] ?? 0;
+      }
       this.setFrame(sp.body, enemyFrame(kind, e.el, f));
       this.setFrame(sp.flash, enemyWhite(kind, f));
       sp.root.position.set(e.x, e.y);
@@ -616,7 +719,9 @@ export class View {
       }
       let shiverX = 0;
       if (e.kind === 'swallow' && e.ai === 1) shiverX = Math.sin(t * 60) * 1.5;
-      if ((e.kind === 'carp' || e.kind === 'turtle') && e.ai === 1) shiverX = Math.sin(t * 55) * 1.2;
+      if ((e.kind === 'carp' || e.kind === 'turtle' || e.kind === 'lion') && e.ai === 1) shiverX = Math.sin(t * 55) * 1.2;
+      if (e.kind === 'fox' && e.ai === 2) shiverX = Math.sin(t * 60) * 0.8;
+      if (e.kind === 'lion' && e.ai === 4) shiverX = Math.sin(t * 22) * 1.6 * Math.min(1, e.aiT);
       let flipX = e.kind === 'swallow' ? 1 : e.vx < -5 ? -1 : e.vx > 5 ? 1 : sp.body.scale.x < 0 ? -1 : 1;
       if (posed) flipX = e.side;
       // 도는 등딱지는 좌우로 번갈아 뒤집어 팽이처럼 보이게
@@ -638,15 +743,19 @@ export class View {
         sp.body.scale.set((sx * flipX) / BAKE, sy / BAKE);
         sp.flash.scale.set((sx * flipX) / BAKE, sy / BAKE);
       }
-      // 먹 속에 잠긴 잉어는 조금 비친다
+      // 먹 속에 잠긴 잉어는 조금 비친다. 여우는 연기로 흩어졌다 다시 모인다
       const under = e.kind === 'carp' && e.ai <= 1;
-      sp.body.alpha = (e.spawnT > 0 ? grow : 1) * (under ? 0.85 : 1);
+      let ghost = 1;
+      if (e.kind === 'fox' && e.ai === 1) ghost = clamp(e.aiT / FOX_VANISH, 0, 1) * 0.8;
+      if (e.kind === 'fox' && e.ai === 2) ghost = clamp((FOX_APPEAR - e.aiT) / 0.16, 0.15, 1);
+      sp.body.alpha = (e.spawnT > 0 ? grow : 1) * (under ? 0.85 : 1) * ghost;
       sp.flash.alpha = e.hitT > 0 ? (e.hitT / 0.14) * 0.85 : 0;
       const shk = ((e.r * 1.3) / 31 / BAKE) / (1 + e.z / 60);
       sp.shadow.scale.set(shk * pop, shk * pop);
-      sp.shadow.alpha = under ? 0 : 0.28 / (1 + e.z / 60);
+      sp.shadow.alpha = under ? 0 : (0.28 / (1 + e.z / 60)) * ghost;
     }
     this.bossStrokes.end();
+    this.bossFront.end();
     for (const [id, sp] of this.enemySprites) {
       if (!sp.seen) {
         sp.shadow.visible = false;
@@ -831,6 +940,211 @@ export class View {
     void dt;
   }
 
+  /** 봉황 — 몸은 구워 둔 그림을 얹고, 날개와 오색 꼬리는 매 장면 붓으로 긋는다 */
+  private drawPhoenix(e: Enemy, sp: EnemySprites): void {
+    const b = e.boss!;
+    const t = this.clock;
+    const f = Math.cos(e.face) >= 0 ? 1 : -1;
+    const col = inkColor(e.el);
+    const light = col[0] + col[1] + col[2] > 600;
+    const lift = b.z + BODY_LIFT;
+    const cx = e.x;
+    const cy = e.y - lift;
+    const fade = b.move === 'die' ? clamp(1 - Math.max(0, b.t / b.dur - 0.55) / 0.45, 0, 1) : 1;
+
+    // 날개 자세 — down: 0이면 하늘로 곧게, 1이면 아래로 내리친다. fold: 1이면 몸에 붙여 접었다
+    let down = 0.5 - 0.5 * Math.cos(b.flap);
+    let fold = 0;
+    switch (b.move) {
+      case 'perch':
+        fold = clamp(1 - (b.t - 1.0) / 0.3, 0, 1);
+        if (b.t > 1.0 && b.t < 2.3) down = 0.06 + 0.05 * Math.sin(t * 9);
+        break;
+      case 'plunge':
+        fold = b.t < 0.62 ? 0.2 : 0.85;
+        down = 0.3;
+        break;
+      case 'rest':
+        fold = 0.4;
+        down = 0.92;
+        break;
+      case 'die':
+        fold = 0.45 * clamp(b.t / b.dur, 0, 1);
+        down = 0.9;
+        break;
+      case 'sweep':
+        down = b.t >= b.wind ? 0.5 + 0.04 * Math.sin(t * 12) : 0.06;
+        fold = b.t >= b.wind ? 0.12 : 0;
+        break;
+      case 'volley':
+        if (b.t < b.wind) down = 0.04;
+        break;
+      case 'cry':
+        down = 0.06 + 0.05 * Math.sin(t * 9);
+        break;
+      case 'gust': {
+        down = 0;
+        for (const at of GUST_BEATS) {
+          if (b.t >= at - 0.1 && b.t < at) down = (b.t - (at - 0.1)) / 0.1;
+          else if (b.t >= at && b.t < at + 0.34) down = 1 - (b.t - at) / 0.34;
+        }
+        break;
+      }
+    }
+
+    // 오색 꼬리 — 엉덩이에서 마디를 따라 늘어지고, 끝마다 둥근 눈이 달렸다
+    const back = this.bossStrokes;
+    const spine = b.spine;
+    const N = Math.min(TAIL_N, spine.length);
+    if (N > 2 && fade > 0.01) {
+      // 꼬리 끝은 몸보다 조금 처진다 — 하늘 높이 떠도 꼬리가 땅까지 늘어지지 않게
+      const sag = Math.min(lift * 0.6, 46);
+      const base = spine.slice(0, N).map((p, i) => ({ x: p.x, y: p.y - (lift - (i / (N - 1)) * sag - 4) }));
+      for (let k = -2; k <= 2; k++) {
+        const pts = base.map((p, i) => {
+          const a = base[Math.max(0, i - 1)];
+          const c = base[Math.min(N - 1, i + 1)];
+          const dx = c.x - a.x;
+          const dy = c.y - a.y;
+          const l = Math.hypot(dx, dy) || 1;
+          const u = i / (N - 1);
+          const off = k * (1.5 + u * 13) + Math.sin(t * 3 - i * 0.55 + k * 1.3) * u * 5;
+          return { x: p.x - (dy / l) * off, y: p.y + (dx / l) * off };
+        });
+        const dark = k % 2 !== 0;
+        back.stroke(pts, { width: 7 - Math.abs(k) * 0.6, color: dark ? mix(col, INK, light ? 0.3 : 0.45) : col, alpha: 0.95 * fade, dryness: 0.35, edgeInk: 0.6, taperIn: 0.05, taperOut: 0.2, seed: e.seed + 200 + k });
+        const end = pts[N - 1];
+        const eye = PHOENIX_FIVE[k + 2];
+        // 깃 끝의 둥근 눈 — 오방색으로 메우고 먹 테를 두른다
+        back.stroke(arcPoints(end.x, end.y, 3.4, k, TAU * 1.05, 14), { width: 7.5, color: eye, alpha: fade, dryness: 0, wet: 0.2, taperIn: 0, taperOut: 0, edgeInk: 0, seed: e.seed + 210 + k });
+        back.stroke(arcPoints(end.x, end.y, 7, k, TAU * 0.98, 16), { width: 1.8, color: INK, alpha: 0.85 * fade, dryness: 0.3, taperIn: 0.05, taperOut: 0.05, seed: e.seed + 220 + k });
+        back.stroke(arcPoints(end.x, end.y, 1.2, k, TAU * 1.05, 8), { width: 2.6, color: mix(eye, INK, 0.6), alpha: fade, dryness: 0, taperIn: 0, taperOut: 0, seed: e.seed + 230 + k });
+        // 바깥 깃 끝에서 가는 털이 더 뻗는다
+        if (Math.abs(k) === 2) {
+          const prev = pts[N - 2];
+          const dx = end.x - prev.x;
+          const dy = end.y - prev.y;
+          back.stroke([end, { x: end.x + dx * 2.2 + Math.sin(t * 4 + k) * 4, y: end.y + dy * 2.2 + 6 }], { width: 2, color: col, alpha: 0.8 * fade, dryness: 0.4, taperIn: 0.1, taperOut: 0.9, seed: e.seed + 240 + k });
+        }
+      }
+    }
+
+    // 다리 — 땅을 디딜 때만
+    if (b.z < 10 && b.move !== 'die') {
+      const leg: RGB = [190, 146, 70];
+      for (const s of [-1, 1]) {
+        const hip = { x: cx + f * (s * 5 - 2), y: cy + 16 };
+        const foot = { x: e.x + f * (s * 7 + 2), y: e.y };
+        const knee = { x: (hip.x + foot.x) / 2 - f * 6, y: (hip.y + foot.y) / 2 };
+        const sb = s > 0 ? this.bossFront : back;
+        sb.stroke([hip, knee, foot], { width: 3.2, color: leg, alpha: fade, dryness: 0.3, edgeInk: 0.8, taperIn: 0.05, taperOut: 0.1, seed: e.seed + 250 + s });
+        for (const ta of [-0.5, 0, 0.5]) {
+          sb.stroke([foot, { x: foot.x + f * Math.cos(ta) * 8, y: foot.y + Math.sin(ta) * 3 }], { width: 1.8, color: mix(leg, INK, 0.4), alpha: fade, taperOut: 0.6, seed: e.seed + 255 + s * 3 + ta * 4 });
+        }
+      }
+    }
+
+    // 날개 — 몸통 축을 따라 도는 날개를 비스듬히 내려다본 모습으로 옮긴다
+    const ZT = 0.5;
+    const proj = (v: [number, number, number]): Vec => ({ x: f * v[0], y: -v[1] + v[2] * ZT });
+    const norm = (v: [number, number, number]): [number, number, number] => {
+      const l = Math.hypot(v[0], v[1], v[2]) || 1;
+      return [v[0] / l, v[1] / l, v[2] / l];
+    };
+    const wing = (sb: StrokeBatch, far: boolean): void => {
+      const side = far ? -1 : 1;
+      const th = lerp(0.12, 2.25, down);
+      let dir = norm([lerp(-0.38, -1, fold), lerp(Math.cos(th), 0.12, fold), lerp(Math.sin(th), 0.12, fold) * side]);
+      if (far) dir = norm([dir[0] + 0.05, dir[1] + 0.05, dir[2]]);
+      // 날개 면 안에서 뒤쪽(깃이 펼쳐지는 쪽)
+      const d = dir[0] * -1;
+      const bk = norm([-1 - dir[0] * d, -dir[1] * d, -dir[2] * d]);
+      const fan = (phi: number): [number, number, number] => norm([dir[0] * Math.cos(phi) + bk[0] * Math.sin(phi), dir[1] * Math.cos(phi) + bk[1] * Math.sin(phi), dir[2] * Math.cos(phi) + bk[2] * Math.sin(phi)]);
+      const span = (far ? 0.84 : 1) * lerp(1, 0.55, fold);
+      const S = { x: cx + f * (far ? 12 : 5) * PHOENIX_SCALE, y: cy + (far ? -20 : -15) * PHOENIX_SCALE };
+      const at = (o: Vec, v: [number, number, number], len: number): Vec => {
+        const p = proj(v);
+        return { x: o.x + p.x * len, y: o.y + p.y * len };
+      };
+      const arm = 58 * span;
+      const wrist = at(S, dir, arm);
+      const elbow = at(S, fan(0.35), arm * 0.5);
+      const basec = far ? mix(col, PAPER_LIGHT, light ? 0 : 0.16) : col;
+      const dark = mix(basec, INK, light ? 0.35 : 0.5);
+      const tip = mix(basec, INK, light ? 0.55 : 0.72);
+      const al = fade * (far ? 0.92 : 1);
+      // 둘째날개깃 — 팔을 따라 뒤로 드리운다
+      for (let j = 0; j < 8; j++) {
+        const u = 0.08 + (j / 7) * 0.88;
+        const q = { x: S.x + (wrist.x - S.x) * u, y: S.y + (wrist.y - S.y) * u };
+        const v = fan(1.3 - j * 0.07);
+        const L = (46 - j * 1.2) * span;
+        const mid = at(q, fan(1.2 - j * 0.07), L * 0.55);
+        sb.stroke([q, mid, at(q, v, L)], { width: 11, color: j % 2 ? dark : basec, alpha: al, dryness: 0.4, edgeInk: 0.7, taperIn: 0.25, taperOut: 0.75, seed: e.seed + 300 + j + (far ? 50 : 0) });
+      }
+      // 첫째날개깃 — 손목에서 부채처럼
+      for (let k = 6; k >= 0; k--) {
+        const v = fan(0.04 + k * 0.14);
+        const L = (70 - k * 4) * span;
+        sb.stroke([wrist, at(wrist, fan(0.0 + k * 0.13), L * 0.5), at(wrist, v, L)], {
+          width: 10 - k * 0.3,
+          color: k < 3 ? tip : dark,
+          alpha: al,
+          dryness: 0.5,
+          edgeInk: 0.6,
+          taperIn: 0.2,
+          taperOut: 0.85,
+          seed: e.seed + 320 + k + (far ? 50 : 0),
+        });
+      }
+      // 덮깃 — 팔 위에 짧게 겹친다
+      for (let j = 0; j < 6; j++) {
+        const u = 0.12 + (j / 5) * 0.8;
+        const q = { x: S.x + (wrist.x - S.x) * u, y: S.y + (wrist.y - S.y) * u };
+        sb.stroke([q, at(q, fan(1.0), 20 * span)], { width: 9, color: mix(basec, PAPER_LIGHT, light ? 0 : 0.22), alpha: al, dryness: 0.3, edgeInk: 0.5, taperIn: 0.3, taperOut: 0.7, seed: e.seed + 340 + j + (far ? 50 : 0) });
+      }
+      // 날개 앞선
+      sb.stroke([S, elbow, wrist], { width: 9, color: basec, alpha: al, dryness: 0.35, edgeInk: 0.8, taperIn: 0.1, taperOut: 0.5, seed: e.seed + 360 + (far ? 50 : 0) });
+    };
+    if (fade > 0.01) {
+      wing(back, true);
+      wing(this.bossFront, false);
+    }
+    back.mesh.zIndex = e.y - 0.5;
+    this.bossFront.mesh.zIndex = e.y + 0.5;
+
+    // 몸
+    const open =
+      (b.move === 'cry' && b.t > 0.2 && b.t < 1.3) ||
+      (b.move === 'perch' && b.t > 1.15 && b.t < 2.4) ||
+      (b.move === 'volley' && b.t > b.wind * 0.75 && b.t < b.wind + 0.25) ||
+      b.move === 'gust' ||
+      b.move === 'fall' ||
+      b.move === 'die';
+    this.setFrame(sp.body, phoenixFrame(e.el, open));
+    this.setFrame(sp.flash, phoenixWhite(open));
+    sp.root.position.set(e.x, e.y);
+    sp.root.zIndex = e.y;
+    let rot = 0;
+    if (b.move === 'plunge' && b.t >= 0.62) rot = 0.55;
+    else if (b.move === 'sweep' && b.t >= b.wind) rot = 0.12;
+    else if (b.move === 'climb') rot = -0.12;
+    else if (b.move === 'fall') rot = Math.sin(b.t * 14) * 0.18 * (1 - b.t / b.dur);
+    else if (b.move === 'die') rot = 0.35 * clamp(b.t / b.dur, 0, 1);
+    for (const s of [sp.body, sp.flash]) {
+      s.position.set(0, -lift);
+      s.rotation = rot * f;
+      s.scale.set(f / BAKE, 1 / BAKE);
+    }
+    sp.body.alpha = fade;
+    sp.flash.alpha = e.hitT > 0 ? (e.hitT / 0.14) * 0.55 : 0;
+    // 높이 떠도 그림자는 또렷하게 — 어디로 내리꽂을지 읽히도록
+    const k = 1 / (1 + b.z / 300);
+    const shw = 70 / 31 / BAKE;
+    sp.shadow.scale.set(shw * (0.75 + 0.25 * k), shw * 0.7 * (0.75 + 0.25 * k));
+    sp.shadow.alpha = (b.move === 'perch' ? 0 : 0.34) * Math.max(0.55, k) * fade;
+  }
+
   private drawFx(g: Game): void {
     const t = g.time;
     this.fxStrokes.begin();
@@ -935,6 +1249,16 @@ export class View {
         l.position.set(desk.x, desk.y + 58);
         l.alpha = near;
       }
+    }
+    // 칠 수 있는 범종에 다가가면
+    if (this.bellHint) {
+      const res = textRes(this.app.renderer.resolution * this.scale * 1.15);
+      const l = this.textPool.next();
+      l.texture = this.text.get('범종 — 붓으로 치면 종소리가 먹귀를 굳힌다', { size: 14, color: INK, res, weight: 900, halo: 2.4 });
+      l.anchor.set(0.5);
+      l.scale.set(1 / res);
+      l.position.set(this.bellHint.x, this.bellHint.y);
+      l.alpha = this.bellHint.a;
     }
     for (const ft of g.texts) {
       const s = this.textPool.next();
